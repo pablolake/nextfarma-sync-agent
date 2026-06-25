@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
+  <title>NextFarma Sync</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- HEADER -->
+  <header>
+    <div class="logo">
+      <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+        <rect width="28" height="28" rx="6" fill="#3b82f6"/>
+        <path d="M8 14h12M14 8v12" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+        <circle cx="20" cy="20" r="4" fill="#22c55e"/>
+        <path d="M18.5 20l1 1 2-2" stroke="white" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span class="logo-text">NextFarma <strong>Sync</strong></span>
+    </div>
+
+    <div class="header-status" id="header-status">
+      <span class="status-dot" id="status-dot"></span>
+      <span id="status-label">Iniciando…</span>
+    </div>
+  </header>
+
+  <!-- INFO BAR -->
+  <div class="info-bar" id="info-bar">
+    <span id="tenant-name">—</span>
+    <div class="info-bar-right">
+      <span id="last-sync-label">Sin sincronizar aún</span>
+      <button class="btn btn-sm btn-primary" id="btn-sync-now" onclick="syncNow()">
+        🔄 Sincronizar ahora
+      </button>
+    </div>
+  </div>
+
+  <!-- TABS -->
+  <nav class="tabs">
+    <button class="tab active" data-tab="estado" onclick="switchTab('estado')">Estado</button>
+    <button class="tab" data-tab="config" onclick="switchTab('config')">Configuración</button>
+    <button class="tab" data-tab="wizard" onclick="switchTab('wizard')">
+      Asistente <span class="tab-badge" id="wizard-badge" style="display:none">!</span>
+    </button>
+    <button class="tab" data-tab="logs" onclick="switchTab('logs')">Registro</button>
+  </nav>
+
+  <!-- TAB: ESTADO -->
+  <section id="tab-estado" class="tab-content active">
+    <div class="cards">
+      <div class="card">
+        <div class="card-icon">🌐</div>
+        <div class="card-body">
+          <div class="card-title">API NextFarma</div>
+          <div class="card-value" id="api-status">—</div>
+        </div>
+        <div class="card-badge" id="api-badge">—</div>
+      </div>
+      <div class="card">
+        <div class="card-icon">🗄️</div>
+        <div class="card-body">
+          <div class="card-title">Farmatic SQL Server</div>
+          <div class="card-value" id="db-status">—</div>
+        </div>
+        <div class="card-badge" id="db-badge">—</div>
+      </div>
+      <div class="card">
+        <div class="card-icon">🏠</div>
+        <div class="card-body">
+          <div class="card-title">Servidor local (crónicos)</div>
+          <div class="card-value" id="local-status">localhost:3001</div>
+        </div>
+        <div class="card-badge" id="local-badge">—</div>
+      </div>
+    </div>
+
+    <div class="section-title">Sincronización automática</div>
+    <div class="sync-control">
+      <div class="sync-toggle-wrap">
+        <label class="toggle">
+          <input type="checkbox" id="toggle-sync" onchange="toggleSync(this.checked)">
+          <span class="toggle-slider"></span>
+        </label>
+        <span id="sync-toggle-label">Desactivada</span>
+      </div>
+      <div class="sync-info" id="sync-info">
+        <span id="next-sync-label"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- TAB: CONFIG -->
+  <section id="tab-config" class="tab-content">
+    <!-- API Key -->
+    <div class="form-section">
+      <div class="form-section-title">API Key</div>
+      <p class="form-hint">Tu clave de acceso, enviada por email al dar de alta la farmacia.</p>
+      <div class="input-row">
+        <input type="password" id="cfg-apikey" class="input" placeholder="fxi_…" autocomplete="off" spellcheck="false">
+        <button class="btn btn-secondary" onclick="verifyApiKey()">Verificar</button>
+      </div>
+      <div class="verify-result" id="api-verify-result"></div>
+    </div>
+
+    <!-- DB -->
+    <div class="form-section">
+      <div class="form-section-title">Conexión SQL Server (Farmatic)</div>
+      <div class="form-grid">
+        <div class="form-field">
+          <label>Servidor</label>
+          <input type="text" id="cfg-db-server" class="input" placeholder="localhost">
+        </div>
+        <div class="form-field form-field-sm">
+          <label>Instancia</label>
+          <input type="text" id="cfg-db-instance" class="input" placeholder="FARMATIC">
+        </div>
+        <div class="form-field form-field-sm">
+          <label>Puerto</label>
+          <input type="number" id="cfg-db-port" class="input" placeholder="1433" min="1" max="65535">
+        </div>
+        <div class="form-field">
+          <label>Usuario</label>
+          <input type="text" id="cfg-db-user" class="input" placeholder="sa" autocomplete="off">
+        </div>
+        <div class="form-field">
+          <label>Contraseña</label>
+          <input type="password" id="cfg-db-password" class="input" autocomplete="new-password">
+        </div>
+        <div class="form-field">
+          <label>Base de datos</label>
+          <input type="text" id="cfg-db-name" class="input" placeholder="Farmatic">
+        </div>
+        <div class="form-field">
+          <label>BD Consejo</label>
+          <input type="text" id="cfg-db-consejo" class="input" placeholder="Consejo">
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-secondary" onclick="testDbConnection()">Probar conexión</button>
+        <div class="test-result" id="db-test-result"></div>
+      </div>
+    </div>
+
+    <!-- Sync options -->
+    <div class="form-section">
+      <div class="form-section-title">Opciones de sincronización</div>
+      <div class="form-grid">
+        <div class="form-field form-field-sm">
+          <label>Intervalo (minutos)</label>
+          <input type="number" id="cfg-interval" class="input" value="15" min="5" max="120">
+        </div>
+      </div>
+      <label class="checkbox-label">
+        <input type="checkbox" id="cfg-autostart"> Iniciar con Windows
+      </label>
+      <label class="checkbox-label">
+        <input type="checkbox" id="cfg-autosync" checked> Sincronizar al arrancar
+      </label>
+    </div>
+
+    <div class="form-footer">
+      <button class="btn btn-primary btn-lg" onclick="saveConfig()">Guardar y aplicar</button>
+      <div class="save-result" id="save-result"></div>
+    </div>
+  </section>
+
+  <!-- TAB: WIZARD -->
+  <section id="tab-wizard" class="tab-content">
+    <div class="wizard-wrap">
+      <!-- Progress -->
+      <div class="wizard-steps">
+        <div class="wstep active" id="ws-0">
+          <span class="wstep-num">1</span>
+          <span class="wstep-lbl">Vendedores</span>
+        </div>
+        <div class="wstep-line"></div>
+        <div class="wstep" id="ws-1">
+          <span class="wstep-num">2</span>
+          <span class="wstep-lbl">Labs SC</span>
+        </div>
+        <div class="wstep-line"></div>
+        <div class="wstep" id="ws-2">
+          <span class="wstep-num">3</span>
+          <span class="wstep-lbl">Listas</span>
+        </div>
+        <div class="wstep-line"></div>
+        <div class="wstep" id="ws-3">
+          <span class="wstep-num">4</span>
+          <span class="wstep-lbl">Resumen</span>
+        </div>
+      </div>
+
+      <!-- Step 0: Vendedores -->
+      <div class="wpage active" id="wp-0">
+        <div class="wpage-title">Paso 1 de 4 — Vendedores a excluir</div>
+        <p class="wpage-desc">
+          Farmatic tiene un <strong>vendedor de sistema</strong> que registra ventas internas
+          (bajas de stock, autoconsumo…). Marca los que deben <em>excluirse</em> del análisis
+          de ventas del equipo.
+        </p>
+        <p class="wpage-hint">
+          💡 En Farmatic: <strong>Ficheros → Vendedores</strong>. El de "Autoconsumo" o
+          "Sistema" suele tener ID 99 o 1.
+        </p>
+        <div class="wizard-loading" id="w0-loading">Cargando vendedores desde Farmatic…</div>
+        <div id="w0-error" class="wpage-error" style="display:none"></div>
+        <div id="w0-list" class="wcheck-list" style="display:none"></div>
+        <div class="wizard-nav">
+          <span></span>
+          <button class="btn btn-primary" onclick="wizardNext(1)">Siguiente →</button>
+        </div>
+      </div>
+
+      <!-- Step 1: Labs SC -->
+      <div class="wpage" id="wp-1">
+        <div class="wpage-title">Paso 2 de 4 — Laboratorios de Selección de Genéricos</div>
+        <p class="wpage-desc">
+          Para calcular los rappels de SC necesitamos saber qué código de proveedor usa
+          tu Farmatic para CINFA, NORMON, KERN y TEVA. Selecciona el código de cada uno.
+        </p>
+        <p class="wpage-hint">
+          💡 En Farmatic: <strong>Ficheros → Proveedores</strong>. Busca los laboratorios de
+          genéricos. Si no trabajas con alguno, deja "— No usar —".
+        </p>
+        <div class="wizard-loading" id="w1-loading">Cargando laboratorios desde Farmatic…</div>
+        <div id="w1-error" class="wpage-error" style="display:none"></div>
+        <div id="w1-form" style="display:none">
+          <div class="wlab-grid">
+            <div class="wlab-row"><span class="wlab-name">CINFA</span>
+              <select id="wz-lab-cinfa" class="input wlab-sel"></select>
+            </div>
+            <div class="wlab-row"><span class="wlab-name">NORMON</span>
+              <select id="wz-lab-normon" class="input wlab-sel"></select>
+            </div>
+            <div class="wlab-row"><span class="wlab-name">KERN</span>
+              <select id="wz-lab-kern" class="input wlab-sel"></select>
+            </div>
+            <div class="wlab-row"><span class="wlab-name">TEVA</span>
+              <select id="wz-lab-teva" class="input wlab-sel"></select>
+            </div>
+          </div>
+          <div class="wsc-row">
+            <div class="form-field form-field-sm">
+              <label>Umbral SC (€/mes)</label>
+              <input type="number" id="wz-sc-umbral" class="input" value="2500" min="100" step="100">
+            </div>
+            <div class="form-field form-field-sm">
+              <label>% SC CINFA/NORMON</label>
+              <input type="number" id="wz-sc-cn" class="input" value="5" min="0" max="50" step="0.5">
+            </div>
+            <div class="form-field form-field-sm">
+              <label>% SC KERN/TEVA</label>
+              <input type="number" id="wz-sc-kt" class="input" value="10" min="0" max="50" step="0.5">
+            </div>
+          </div>
+        </div>
+        <div class="wizard-nav">
+          <button class="btn btn-secondary" onclick="wizardNext(0)">← Anterior</button>
+          <button class="btn btn-primary" onclick="wizardNext(2)">Siguiente →</button>
+        </div>
+      </div>
+
+      <!-- Step 2: Listas -->
+      <div class="wpage" id="wp-2">
+        <div class="wpage-title">Paso 3 de 4 — Listas de favoritos</div>
+        <p class="wpage-desc">
+          NextFarma organiza los genéricos en 6 categorías. Asigna cada categoría a la
+          lista de Farmatic correspondiente.
+        </p>
+        <p class="wpage-hint">
+          💡 En Farmatic: <strong>Utilidades → Listas de artículos</strong>. Si no usas
+          estas categorías, deja "— Sin asignar —" y el sync omitirá los favoritos.
+        </p>
+        <div class="wizard-loading" id="w2-loading">Cargando listas desde Farmatic…</div>
+        <div id="w2-error" class="wpage-error" style="display:none"></div>
+        <div id="w2-form" style="display:none">
+          <div class="wlist-grid">
+            <div class="wlist-row"><span class="wlist-cat">INCENTIVADOS STAR</span>
+              <select id="wz-list-star" class="input wlist-sel"></select>
+            </div>
+            <div class="wlist-row"><span class="wlist-cat">INCENTIVADOS</span>
+              <select id="wz-list-inc" class="input wlist-sel"></select>
+            </div>
+            <div class="wlist-row"><span class="wlist-cat">MÁX. ROTACIÓN A</span>
+              <select id="wz-list-mrota" class="input wlist-sel"></select>
+            </div>
+            <div class="wlist-row"><span class="wlist-cat">MÁX. ROTACIÓN B</span>
+              <select id="wz-list-mrotb" class="input wlist-sel"></select>
+            </div>
+            <div class="wlist-row"><span class="wlist-cat">RESTO</span>
+              <select id="wz-list-resto" class="input wlist-sel"></select>
+            </div>
+            <div class="wlist-row"><span class="wlist-cat">PARADOS</span>
+              <select id="wz-list-par" class="input wlist-sel"></select>
+            </div>
+          </div>
+        </div>
+        <div class="wizard-nav">
+          <button class="btn btn-secondary" onclick="wizardNext(1)">← Anterior</button>
+          <button class="btn btn-primary" onclick="wizardNext(3)">Siguiente →</button>
+        </div>
+      </div>
+
+      <!-- Step 3: Summary -->
+      <div class="wpage" id="wp-3">
+        <div class="wpage-title">Paso 4 de 4 — Resumen</div>
+        <div id="wizard-summary" class="wizard-summary"></div>
+        <div class="wizard-nav">
+          <button class="btn btn-secondary" onclick="wizardNext(2)">← Modificar</button>
+          <button class="btn btn-primary btn-lg" onclick="wizardFinish()">✓ Guardar configuración</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TAB: LOGS -->
+  <section id="tab-logs" class="tab-content">
+    <div class="log-toolbar">
+      <label class="checkbox-label small">
+        <input type="checkbox" id="log-autoscroll" checked> Auto-scroll
+      </label>
+      <button class="btn btn-sm btn-ghost" onclick="clearLogs()">Limpiar</button>
+      <button class="btn btn-sm btn-ghost" onclick="openLogsFolder()">📂 Carpeta de logs</button>
+    </div>
+    <div class="log-container" id="log-container"></div>
+  </section>
+
+  <script src="app.js"></script>
+</body>
+</html>

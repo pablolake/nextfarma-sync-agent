@@ -1,0 +1,59 @@
+{
+  "name": "nextfarma-sync",
+  "version": "1.0.0",
+  "description": "NextFarma Sync — agente local que sincroniza Farmatic (SQL Server) con la plataforma NextFarma.",
+  "private": true,
+  "main": "electron/main.js",
+  "scripts": {
+    "start":       "electron .",
+    "dev":         "electron . --dev",
+    "sync":        "node src/sync.js",
+    "build:win":   "electron-builder --win --x64",
+    "build:win32": "electron-builder --win --ia32",
+    "build:mac":   "electron-builder --mac"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.6.0",
+    "dotenv":         "^16.4.5",
+    "electron-store": "^5.2.0",
+    "express":        "^4.19.2",
+    "mssql":          "^11.0.1"
+  },
+  "devDependencies": {
+    "electron":         "^30.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId":       "es.nextfarma.sync",
+    "productName": "NextFarma Sync",
+    "copyright":   "Copyright © 2026 NextFarma",
+    "asar": true,
+    "files": [
+      "electron/**/*",
+      "src/**/*",
+      "node_modules/**/*",
+      "!node_modules/electron/dist/**",
+      "!node_modules/.cache/**"
+    ],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "artifactName": "NextFarma-Sync-Setup-${version}.${ext}"
+    },
+    "mac": {
+      "target": [{ "target": "dmg", "arch": ["x64", "arm64"] }],
+      "artifactName": "NextFarma-Sync-${version}.${ext}",
+      "category": "public.app-category.business"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "NextFarma Sync"
+    },
+    "extraResources": [],
+    "nodeGypRebuild": false,
+    "npmRebuild": true,
+    "buildDependenciesFromSource": false
+  }
+}
