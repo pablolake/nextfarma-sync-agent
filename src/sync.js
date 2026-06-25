@@ -53,13 +53,20 @@ function calcularSCporLabMes(ventas, productos) {
 async function runSync() {
   const t0 = Date.now();
   log.info('═══════════════════════════════════════════');
-  log.info('🔄 Iniciando sincronización');
+  log.info('Iniciando sincronización');
+
+  // Track partial results to inform the user at the end
+  const resultados = { ok: [], warn: [], error: [] };
+  const ok   = (msg) => { resultados.ok.push(msg);    log.info('✓ ' + msg); };
+  const warn = (msg) => { resultados.warn.push(msg);  log.warn('⚠ ' + msg); };
+  const err  = (msg) => { resultados.error.push(msg); log.error('✗ ' + msg); };
 
   try {
     const s = await api.status();
-    log.info(`✓ API OK · Farmacia: ${s.tenant?.nombre || '—'}`);
-  } catch (err) {
-    log.error('API inalcanzable:', err.message);
+    ok(`API conectada · Farmacia: ${s.tenant?.nombre || '—'}`);
+  } catch (e) {
+    err('API inalcanzable: ' + e.message);
+    err('Sync cancelado: sin conexión con NextFarma.');
     return;
   }
 
@@ -70,18 +77,23 @@ async function runSync() {
     const vActual   = await farmatic.fetchVentasMensuales(anioActual);
     const vAnterior = await farmatic.fetchVentasMensuales(anioAnterior);
     todasVentas = [...vActual, ...vAnterior];
-    log.info(`✓ Ventas mensuales: ${vActual.length} (${anioActual}) + ${vAnterior.length} (${anioAnterior})`);
-  } catch (err) {
-    log.warn('Ventas mensuales omitidas:', err.message);
+    ok(`Ventas: ${vActual.length} (${anioActual}) + ${vAnterior.length} (${anioAnterior})`);
+  } catch (e) {
+    warn('Ventas no disponibles: ' + e.message + ' — Los análisis de ventas no se actualizarán.');
   }
 
   let productos = [];
   try {
     productos = await farmatic.fetchProductos();
-    log.info(`✓ ${productos.length} productos leídos (Farmatic + Consejo)`);
-  } catch (err) {
-    log.error('Error leyendo productos:', err.message);
-    return;
+    ok(`${productos.length} productos leídos`);
+    // Inform about products with missing key fields
+    const sinPvl = productos.filter(p => !p.pvl).length;
+    const sinDto = productos.filter(p => !p.dto).length;
+    if (sinPvl > 0) warn(`${sinPvl} productos sin PVL — precio de compra se estimará por ratio`);
+    if (sinDto > 0 && sinDto < productos.length * 0.5)
+      warn(`${sinDto} productos sin descuento Cofares — SC no calculable para esos CNs`);
+  } catch (e) {
+    warn('Catálogo de productos no disponible: ' + e.message + ' — El resto del sync continúa.');
   }
 
   // Load recepciones early so we can use bonificacion as dto fallback
@@ -159,19 +171,24 @@ async function runSync() {
   if (productos.length > 0) {
     try {
       const r = await api.enviarProductos(productos);
-      log.info(`✓ Productos: ${r.inserted} nuevos, ${r.updated} actualizados, ${r.errors} errores`);
-    } catch (err) {
-      log.error('Error enviando productos:', err.message);
+      ok(`Productos: ${r.inserted} nuevos, ${r.updated} actualizados${r.errors > 0 ? `, ${r.errors} errores` : ''}`);
+      if (r.errors > 0) warn(`${r.errors} productos rechazados por la API — puede haber CNs con datos incompletos`);
+    } catch (e) {
+      err('Error enviando productos: ' + e.message);
     }
+  } else {
+    warn('Sin productos que enviar — el catálogo no se actualizará');
   }
 
   if (todasVentas.length > 0) {
     try {
       const r = await api.enviarVentas(todasVentas);
-      log.info(`✓ Ventas: ${r.upserts} actualizadas, ${r.errors} errores`);
-    } catch (err) {
-      log.error('Error enviando ventas:', err.message);
+      ok(`Ventas: ${r.upserts} actualizadas${r.errors > 0 ? `, ${r.errors} errores` : ''}`);
+    } catch (e) {
+      err('Error enviando ventas: ' + e.message);
     }
+  } else {
+    warn('Sin ventas que enviar — tablas Venta/LineaVenta no accesibles o vacías');
   }
 
   try {
@@ -302,7 +319,16 @@ async function runSync() {
   }
 
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-  log.info(`✨ Sincronización completada en ${elapsed}s`);
+  log.info('═══════════════════════════════════════════');
+  if (resultados.error.length > 0 || resultados.warn.length > 0) {
+    log.info(`Sync completado en ${elapsed}s con avisos:`);
+    resultados.warn.forEach(m  => log.warn('  ⚠ ' + m));
+    resultados.error.forEach(m => log.error('  ✗ ' + m));
+    if (resultados.error.length > 0)
+      log.error('Revisa la configuración de conexión o contacta con soporte.');
+  } else {
+    log.info(`Sync completado correctamente en ${elapsed}s`);
+  }
 }
 
 async function syncEncargos() {

@@ -108,36 +108,90 @@
     <!-- DB -->
     <div class="form-section">
       <div class="form-section-title">Conexión SQL Server (Farmatic)</div>
-      <div class="form-grid">
-        <div class="form-field">
-          <label>Servidor</label>
-          <input type="text" id="cfg-db-server" class="input" placeholder="localhost">
+      <p class="form-hint">Los valores por defecto funcionan en la mayoría de instalaciones. Usa "Más info" si necesitas verificar algún campo.</p>
+
+      <div class="cfg-field-block">
+        <div class="cfg-field-row">
+          <div class="form-field">
+            <label>Servidor <span class="field-src">sys.connections · @@SERVERNAME</span></label>
+            <input type="text" id="cfg-db-server" class="input" placeholder="localhost">
+          </div>
+          <div class="form-field form-field-sm">
+            <label>Instancia <span class="field-src">SQL Server Services</span></label>
+            <input type="text" id="cfg-db-instance" class="input" placeholder="FARMATIC">
+          </div>
+          <div class="form-field form-field-sm">
+            <label>Puerto <span class="field-src">TCP/IP Properties</span></label>
+            <input type="number" id="cfg-db-port" class="input" placeholder="1433" min="1" max="65535">
+          </div>
         </div>
-        <div class="form-field form-field-sm">
-          <label>Instancia</label>
-          <input type="text" id="cfg-db-instance" class="input" placeholder="FARMATIC">
-        </div>
-        <div class="form-field form-field-sm">
-          <label>Puerto</label>
-          <input type="number" id="cfg-db-port" class="input" placeholder="1433" min="1" max="65535">
-        </div>
-        <div class="form-field">
-          <label>Usuario</label>
-          <input type="text" id="cfg-db-user" class="input" placeholder="sa" autocomplete="off">
-        </div>
-        <div class="form-field">
-          <label>Contraseña</label>
-          <input type="password" id="cfg-db-password" class="input" autocomplete="new-password">
-        </div>
-        <div class="form-field">
-          <label>Base de datos</label>
-          <input type="text" id="cfg-db-name" class="input" placeholder="Farmatic">
-        </div>
-        <div class="form-field">
-          <label>BD Consejo</label>
-          <input type="text" id="cfg-db-consejo" class="input" placeholder="Consejo">
+        <button class="btn-más-info" onclick="toggleInfo('info-servidor')">+ Más info</button>
+        <div class="field-info" id="info-servidor">
+          <div class="field-info-text">
+            <strong>Dónde encontrarlo:</strong> Inicio → <em>SQL Server Configuration Manager</em> → SQL Server Network Configuration → Protocols for FARMATIC → TCP/IP → pestaña IP Addresses → IPAll.<br>
+            <strong>Servidor:</strong> normalmente <code>localhost</code> o el nombre del PC.<br>
+            <strong>Instancia:</strong> el nombre entre paréntesis en "SQL Server (INSTANCIA)".<br>
+            <strong>Puerto:</strong> campo <em>TCP Port</em> (por defecto 1433, puede estar vacío si usa puerto dinámico).
+          </div>
+          <div class="sql-label">SQL para verificar:</div>
+          <pre class="sql-code">SELECT @@SERVERNAME AS servidor, @@SERVICENAME AS instancia,
+       local_tcp_port AS puerto
+FROM   sys.dm_exec_connections
+WHERE  session_id = @@SPID</pre>
         </div>
       </div>
+
+      <div class="cfg-field-block">
+        <div class="cfg-field-row">
+          <div class="form-field">
+            <label>Usuario SQL <span class="field-src">sys.server_principals</span></label>
+            <input type="text" id="cfg-db-user" class="input" placeholder="sa" autocomplete="off">
+          </div>
+          <div class="form-field">
+            <label>Contraseña SQL</label>
+            <input type="password" id="cfg-db-password" class="input" autocomplete="new-password">
+          </div>
+        </div>
+        <button class="btn-más-info" onclick="toggleInfo('info-usuario')">+ Más info</button>
+        <div class="field-info" id="info-usuario">
+          <div class="field-info-text">
+            <strong>Usuario:</strong> normalmente <code>sa</code> (administrador de SQL Server).<br>
+            <strong>Contraseña:</strong> establecida durante la instalación de Farmatic. Prueba con <code>farmatic</code>, el nombre de la farmacia, o consulta a tu proveedor de Farmatic.<br>
+            Si no recuerdas la contraseña, tu proveedor de Farmatic puede restablecerla.
+          </div>
+          <div class="sql-label">SQL para verificar (con acceso Windows Authentication):</div>
+          <pre class="sql-code">SELECT name, type_desc, is_disabled
+FROM   sys.server_principals
+WHERE  type IN ('S','U') AND name NOT LIKE '##%'
+ORDER  BY name</pre>
+        </div>
+      </div>
+
+      <div class="cfg-field-block">
+        <div class="cfg-field-row">
+          <div class="form-field">
+            <label>Base de datos Farmatic <span class="field-src">sys.databases</span></label>
+            <input type="text" id="cfg-db-name" class="input" placeholder="Farmatic">
+          </div>
+          <div class="form-field">
+            <label>Base de datos Consejo (BOT+) <span class="field-src">sys.databases</span></label>
+            <input type="text" id="cfg-db-consejo" class="input" placeholder="Consejo">
+          </div>
+        </div>
+        <button class="btn-más-info" onclick="toggleInfo('info-bbdd')">+ Más info</button>
+        <div class="field-info" id="info-bbdd">
+          <div class="field-info-text">
+            <strong>Farmatic:</strong> nombre de la base de datos principal, normalmente <code>Farmatic</code>.<br>
+            <strong>Consejo (BOT+):</strong> base de datos del Consejo General de Farmacéuticos con grupos homogéneos y PVP menor. Normalmente <code>Consejo</code>. Si no existe, los grupos homogéneos no estarán disponibles pero el resto del sync funciona.
+          </div>
+          <div class="sql-label">SQL para verificar (lista todas las bases de datos disponibles):</div>
+          <pre class="sql-code">SELECT name, state_desc, recovery_model_desc
+FROM   sys.databases
+WHERE  name NOT IN ('master','tempdb','model','msdb')
+ORDER  BY name</pre>
+        </div>
+      </div>
+
       <div class="form-actions">
         <button class="btn btn-secondary" onclick="testDbConnection()">Probar conexión</button>
         <div class="test-result" id="db-test-result"></div>

@@ -510,6 +510,47 @@ header {
 .log-level.error { color: var(--error); }
 .log-level.debug { color: var(--muted); }
 
+/* Config field blocks with más-info */
+.cfg-field-block { margin-bottom: 16px; }
+.cfg-field-row   { display: flex; gap: 12px; flex-wrap: wrap; }
+.cfg-field-row .form-field { flex: 1; min-width: 140px; }
+
+.field-src {
+  font-size: 9px; font-weight: 400; color: var(--muted);
+  margin-left: 6px; font-style: normal; letter-spacing: .03em;
+}
+
+.btn-más-info {
+  background: transparent; border: none; cursor: pointer;
+  font-size: 11px; color: var(--primary); padding: 2px 0; margin-top: 4px;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.btn-más-info:hover { text-decoration: underline; }
+
+.field-info {
+  display: none; margin-top: 10px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px;
+}
+.field-info.open { display: block; }
+
+.field-info-text {
+  font-size: 11px; color: var(--text-muted); line-height: 1.6; margin-bottom: 10px;
+}
+.field-info-text code {
+  background: var(--surface2); padding: 1px 5px; border-radius: 3px;
+  font-family: monospace; font-size: 11px; color: var(--text);
+}
+.field-info-text strong { color: var(--text); font-weight: 600; }
+.field-info-text em     { font-style: normal; color: var(--text); }
+
+.sql-label { font-size: 10px; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .05em; }
+.sql-code {
+  background: var(--surface2); border: 1px solid var(--border); border-radius: 4px;
+  padding: 10px 12px; font-family: 'Consolas', 'Courier New', monospace;
+  font-size: 11px; color: #7dd3fc; line-height: 1.5; overflow-x: auto;
+  white-space: pre; margin: 0;
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }

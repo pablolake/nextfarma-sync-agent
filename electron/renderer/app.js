@@ -274,6 +274,14 @@ function switchTab(name) {
   document.getElementById('tab-' + name).classList.add('active');
 }
 
+function toggleInfo(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const open = el.classList.toggle('open');
+  const btn = el.previousElementSibling;
+  if (btn) btn.textContent = open ? '− Cerrar' : '+ Más info';
+}
+
 /* ── Helpers ─────────────────────────────────────────────────────────── */
 function setBadge(id, type, text) {
   const el = document.getElementById(id);
