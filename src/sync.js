@@ -360,7 +360,7 @@ async function syncEncargos() {
       id:           String(r.IdContador),
       cn:           String(r.cn || ''),
       nombre:       r.nombre_articulo || 'Encargo',
-      cliente_id:   String(r.cliente_id || ''),
+      cliente_id:   String(r.cliente_id ?? ''),
       vendedor_id:  r.vendedor_id || null,
       unidades:     r.Unidades || 1,
       fecha_recepcion: r.FechaRecepcion,
@@ -427,10 +427,7 @@ async function syncNuevosCronicos(farmaticPool, apiClient, log) {
     for (const n of nuevos) {
       await apiClient.request('/api/sync/fidelizaciones', {
         method: 'POST',
-        body: {
-          id_farmatic: n.id_farmatic,
-          nombre: `${n.nombre || ''} ${n.apellido1 || ''}`.trim(),
-        }
+        body: { id_farmatic: n.id_farmatic }
       }).catch(() => {});
     }
 
