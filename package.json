@@ -44,7 +44,7 @@
           ]
         }
       ],
-      "artifactName": "NextFarma-Sync-Setup-${version}.${ext}"
+      "artifactName": "NextFarma-Sync-Setup.${ext}"
     },
     "mac": {
       "target": [
