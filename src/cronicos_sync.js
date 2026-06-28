@@ -215,4 +215,52 @@ async function syncCronicos(farmaticPool, apiClient, log) {
   }
 }
 
-module.exports = { syncCronicos };
+async function syncCronicosClientes(apiClient, log) {
+  const Database = require('better-sqlite3');
+  const dbPath = process.env.USERDATA_PATH
+    ? require('path').join(process.env.USERDATA_PATH, 'cronicos.db')
+    : require('path').join(__dirname, 'cronicos.db');
+
+  let db;
+  try {
+    db = new Database(dbPath, { readonly: true });
+  } catch {
+    log.warn('syncCronicosClientes: cronicos.db no encontrada, omitido');
+    return;
+  }
+
+  try {
+    const clientes = db.prepare(`
+      SELECT
+        c.id_farmatic,
+        TRIM(COALESCE(c.nombre, ''))    AS nombre,
+        TRIM(COALESCE(c.apellido1, '')) AS apellido,
+        COALESCE(NULLIF(TRIM(c.tel_representante),''), NULLIF(TRIM(c.telefono),''), '') AS telefono,
+        tc.ultima_visita,
+        COALESCE(tc.dias_ausencia, 0)   AS dias_ausencia,
+        COALESCE(tc.total_tickets, 0)   AS total_tickets,
+        COALESCE(tc.importe_total, 0)   AS importe_total
+      FROM cronicos c
+      LEFT JOIN todos_clientes tc ON tc.id_farmatic = c.id_farmatic
+      WHERE c.consentimiento = 1 AND COALESCE(c.activo, 1) = 1
+      ORDER BY tc.dias_ausencia ASC
+    `).all();
+
+    if (!clientes.length) {
+      log.info('Cronicos clientes: sin pacientes con consentimiento RGPD');
+      return;
+    }
+
+    const r = await apiClient.request('/api/sync/cronicos-clientes', {
+      method: 'POST',
+      body: { clientes }
+    });
+    log.info(`✓ Cronicos RGPD: ${r.actualizados} perfiles enviados a Railway`);
+  } catch (err) {
+    log.warn('syncCronicosClientes omitido:', err.message);
+  } finally {
+    db.close();
+  }
+}
+
+module.exports = { syncCronicos, syncCronicosClientes };

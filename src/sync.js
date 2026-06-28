@@ -6,7 +6,7 @@
 const farmatic = require('./farmatic-client');
 const api      = require('./api-client');
 const log      = require('./logger');
-const { syncCronicos } = require('./cronicos_sync');
+const { syncCronicos, syncCronicosClientes } = require('./cronicos_sync');
 
 const { PVL_FACTOR } = farmatic;
 
@@ -306,6 +306,12 @@ async function runSync() {
     await syncCronicosAlertas(api, log);
   } catch (err) {
     log.warn('syncCronicosAlertas omitido:', err.message);
+  }
+
+  try {
+    await syncCronicosClientes(api, log);
+  } catch (err) {
+    log.warn('syncCronicosClientes omitido:', err.message);
   }
 
   try {
