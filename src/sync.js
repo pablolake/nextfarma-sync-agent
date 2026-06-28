@@ -303,6 +303,12 @@ async function runSync() {
   }
 
   try {
+    await syncCronicosAlertas(api, log);
+  } catch (err) {
+    log.warn('syncCronicosAlertas omitido:', err.message);
+  }
+
+  try {
     await syncEncargosVencidos(api, log);
   } catch (err) {
     log.warn('syncEncargosVencidos omitido:', err.message);
@@ -441,6 +447,61 @@ async function syncNuevosCronicos(farmaticPool, apiClient, log) {
     }
 
     log.info(`✓ ${nuevos.length} nuevos crónicos añadidos a la BD local`);
+  } finally {
+    db.close();
+  }
+}
+
+async function syncCronicosAlertas(apiClient, log) {
+  const Database = require('better-sqlite3');
+  const dbPath = process.env.USERDATA_PATH
+    ? require('path').join(process.env.USERDATA_PATH, 'cronicos.db')
+    : require('path').join(__dirname, 'cronicos.db');
+
+  let db;
+  try {
+    db = new Database(dbPath, { readonly: true });
+  } catch {
+    log.warn('syncCronicosAlertas: cronicos.db no encontrada, omitido');
+    return;
+  }
+
+  try {
+    // Pacientes con medicación que vence en -3..+7 días y consentimiento RGPD
+    const alertas = db.prepare(`
+      SELECT
+        c.id_farmatic,
+        TRIM(c.nombre)    AS nombre,
+        TRIM(COALESCE(c.apellido1, '')) AS apellido,
+        COALESCE(NULLIF(TRIM(c.tel_representante),''), TRIM(c.telefono), '') AS telefono,
+        CASE WHEN COUNT(m.cn) = 1
+          THEN MAX(m.cn)
+          ELSE COUNT(m.cn) || ' medicamentos'
+        END AS medicamento,
+        CAST(MIN(julianday(m.fecha_estimada_salida)) - julianday('now') AS INTEGER) AS dias
+      FROM cronicos c
+      JOIN cronicos_medicacion m ON m.id_farmatic = c.id_farmatic
+      WHERE c.consentimiento = 1
+        AND COALESCE(c.activo, 1) = 1
+        AND m.aviso_enviado = 0
+        AND julianday(m.fecha_estimada_salida) - julianday('now') <= 7
+        AND julianday(m.fecha_estimada_salida) - julianday('now') >= -3
+      GROUP BY c.id_farmatic
+      ORDER BY dias ASC
+    `).all();
+
+    if (!alertas.length) {
+      log.info('Crónicos alertas: sin pacientes próximos a quedarse sin stock');
+      return;
+    }
+
+    const r = await apiClient.request('/api/sync/cronicos-alertas', {
+      method: 'POST',
+      body: { alertas }
+    });
+    log.info(`✓ Crónicos: ${r.avisos_actualizados} avisos · ${r.tareas_creadas} tareas nuevas`);
+  } catch (err) {
+    log.warn('syncCronicosAlertas omitido:', err.message);
   } finally {
     db.close();
   }
