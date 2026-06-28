@@ -13,10 +13,12 @@ contextBridge.exposeInMainWorld('sync', {
   openLogsFolder:   ()       => ipcRenderer.invoke('open-logs-folder'),
 
   // Wizard
-  wizardGetVendors: () => ipcRenderer.invoke('wizard-get-vendors'),
-  wizardGetLabs:    () => ipcRenderer.invoke('wizard-get-labs'),
-  wizardGetLists:   () => ipcRenderer.invoke('wizard-get-lists'),
-  wizardSave:  (cfg) => ipcRenderer.invoke('wizard-save', cfg),
+  wizardGetVendors:  ()        => ipcRenderer.invoke('wizard-get-vendors'),
+  wizardGetLabs:     ()        => ipcRenderer.invoke('wizard-get-labs'),
+  wizardGetLists:    ()        => ipcRenderer.invoke('wizard-get-lists'),
+  wizardRunDiagnostic: (key)    => ipcRenderer.invoke('wizard-run-diagnostic', key),
+  wizardVerifyRGPD:    (opcion) => ipcRenderer.invoke('wizard-verify-rgpd', opcion),
+  wizardSave:        (cfg)     => ipcRenderer.invoke('wizard-save', cfg),
 
   onLog:         (cb) => { ipcRenderer.on('log',          (_, d) => cb(d)); },
   onSyncStatus:  (cb) => { ipcRenderer.on('sync-status',  (_, d) => cb(d)); },

@@ -49,6 +49,7 @@ function applyConfig(cfg) {
   if (w.labNormon)                   process.env.LAB_NORMON        = w.labNormon;
   if (w.labTeva)                     process.env.LAB_TEVA          = w.labTeva;
   if (w.labCinfa)                    process.env.LAB_CINFA         = w.labCinfa;
+  if (w.labSecundarios)              process.env.LAB_SECUNDARIOS   = w.labSecundarios;
   if (w.listIncentivadosStar)        process.env.LIST_INCENTIVADOS_STAR = String(w.listIncentivadosStar);
   if (w.listIncentivados)            process.env.LIST_INCENTIVADOS      = String(w.listIncentivados);
   if (w.listMaxRotA)                 process.env.LIST_MAX_ROT_A         = String(w.listMaxRotA);
@@ -56,6 +57,7 @@ function applyConfig(cfg) {
   if (w.listResto)                   process.env.LIST_RESTO             = String(w.listResto);
   if (w.listParados)                 process.env.LIST_PARADOS           = String(w.listParados);
   if (w.scUmbral)                    process.env.SC_UMBRAL              = String(w.scUmbral);
+  if (w.opcRGPD)                     process.env.RGPD_OPCION            = String(w.opcRGPD);
   if (w.scCinfaNormon)               process.env.SC_CINFA_NORMON        = String(w.scCinfaNormon);
   if (w.scKernTeva)                  process.env.SC_KERN_TEVA           = String(w.scKernTeva);
 }
@@ -86,6 +88,7 @@ async function runSyncOnce() {
     tray?.setToolTip('NextFarma Sync · error');
   } finally {
     isSyncing = false;
+    refreshTray();
   }
 }
 
@@ -97,12 +100,14 @@ function startAutoSync() {
   runSyncOnce();
   syncTimer = setInterval(() => runSyncOnce(), minutes * 60 * 1000);
   send('sync-enabled', { enabled: true, intervalMinutes: minutes });
+  refreshTray();
 }
 
 function stopAutoSync() {
   if (syncTimer) { clearInterval(syncTimer); syncTimer = null; }
   syncEnabled = false;
   send('sync-enabled', { enabled: false });
+  refreshTray();
 }
 
 function startLocalServerIfNeeded() {
@@ -242,6 +247,26 @@ ipcMain.handle('wizard-get-lists', async () => {
   try {
     const farmatic = require('../src/farmatic-client');
     return { ok: true, data: await farmatic.fetchListasWizard() };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('wizard-run-diagnostic', async (_, key) => {
+  try {
+    const farmatic = require('../src/farmatic-client');
+    const result = await farmatic.runDiagnostic(key);
+    return { ok: true, ...result };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('wizard-verify-rgpd', async (_, opcion) => {
+  try {
+    const farmatic = require('../src/farmatic-client');
+    const count = await farmatic.fetchRGPDCount(opcion);
+    return { ok: true, count };
   } catch (err) {
     return { ok: false, error: err.message };
   }

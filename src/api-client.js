@@ -7,14 +7,22 @@ async function request(path, { method = 'GET', body } = {}) {
   if (!base) throw new Error('API_BASE_URL no configurada');
   const headers = { 'Content-Type': 'application/json' };
   if (process.env.API_KEY) headers['X-API-Key'] = process.env.API_KEY;
-  const res = await fetch(base + path, {
-    method, headers, body: body ? JSON.stringify(body) : undefined,
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText);
-    throw new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`);
+  const timeout = parseInt(process.env.API_TIMEOUT_MS, 10) || 30000;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeout);
+  try {
+    const res = await fetch(base + path, {
+      method, headers, body: body ? JSON.stringify(body) : undefined,
+      signal: ctrl.signal,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => res.statusText);
+      throw new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`);
+    }
+    return res.json();
+  } finally {
+    clearTimeout(timer);
   }
-  return res.json();
 }
 
 function chunk(arr, size) {

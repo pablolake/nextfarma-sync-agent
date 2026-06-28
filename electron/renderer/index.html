@@ -282,19 +282,21 @@ ORDER  BY name</pre>
 
       <!-- Step 0: Vendedores -->
       <div class="wpage active" id="wp-0">
-        <div class="wpage-title">Paso 1 de 4 — Vendedores a excluir</div>
+        <div class="wpage-title">Paso 1 de 5 — Vendedores a excluir</div>
         <p class="wpage-desc">
           Farmatic tiene un <strong>vendedor de sistema</strong> que registra ventas internas
           (bajas de stock, autoconsumo…). Marca los que deben <em>excluirse</em> del análisis
           de ventas del equipo.
         </p>
-        <p class="wpage-hint">
-          Nota — <strong>Ficheros → Vendedores</strong>. El de "Autoconsumo" o
-          "Sistema" suele tener ID 99 o 1.
-        </p>
         <div class="wizard-loading" id="w0-loading">Cargando vendedores desde Farmatic…</div>
         <div id="w0-error" class="wpage-error" style="display:none"></div>
         <div id="w0-list" class="wcheck-list" style="display:none"></div>
+        <div class="wdiag-panel" id="wdiag-0">
+          <button class="wdiag-toggle" onclick="wizardDiag(0,'vendedores','¿No aparece el vendedor correcto?')">
+            ¿No aparece el vendedor correcto? — Consultar Farmatic
+          </button>
+          <div class="wdiag-body" id="wdiag-body-0" style="display:none"></div>
+        </div>
         <div class="wizard-nav">
           <span></span>
           <button class="btn btn-primary" onclick="wizardNext(1)">Siguiente →</button>
@@ -303,14 +305,10 @@ ORDER  BY name</pre>
 
       <!-- Step 1: Labs SC -->
       <div class="wpage" id="wp-1">
-        <div class="wpage-title">Paso 2 de 4 — Laboratorios de Selección de Genéricos</div>
+        <div class="wpage-title">Paso 2 de 5 — Laboratorios de Selección de Genéricos</div>
         <p class="wpage-desc">
           Para calcular los rappels de SC necesitamos saber qué código de proveedor usa
           tu Farmatic para CINFA, NORMON, KERN y TEVA. Selecciona el código de cada uno.
-        </p>
-        <p class="wpage-hint">
-          Nota — <strong>Ficheros → Proveedores</strong>. Busca los laboratorios de
-          genéricos. Si no trabajas con alguno, deja "— No usar —".
         </p>
         <div class="wizard-loading" id="w1-loading">Cargando laboratorios desde Farmatic…</div>
         <div id="w1-error" class="wpage-error" style="display:none"></div>
@@ -329,6 +327,10 @@ ORDER  BY name</pre>
               <select id="wz-lab-teva" class="input wlab-sel"></select>
             </div>
           </div>
+          <div class="wlab-row" style="margin-top:10px">
+            <span class="wlab-name" style="font-size:11px;color:#8b949e">Labs secundarios<br><small>(códigos separados por coma)</small></span>
+            <input type="text" id="wz-lab-secundarios" class="input" placeholder="Ej: E0836,E0828" style="flex:1">
+          </div>
           <div class="wsc-row">
             <div class="form-field form-field-sm">
               <label>Umbral SC (€/mes)</label>
@@ -344,6 +346,12 @@ ORDER  BY name</pre>
             </div>
           </div>
         </div>
+        <div class="wdiag-panel" id="wdiag-1">
+          <button class="wdiag-toggle" onclick="wizardDiag(1,'laboratorios','¿No identificas el código de laboratorio?')">
+            ¿No identificas el código correcto? — Consultar Farmatic
+          </button>
+          <div class="wdiag-body" id="wdiag-body-1" style="display:none"></div>
+        </div>
         <div class="wizard-nav">
           <button class="btn btn-secondary" onclick="wizardNext(0)">← Anterior</button>
           <button class="btn btn-primary" onclick="wizardNext(2)">Siguiente →</button>
@@ -352,14 +360,11 @@ ORDER  BY name</pre>
 
       <!-- Step 2: Listas -->
       <div class="wpage" id="wp-2">
-        <div class="wpage-title">Paso 3 de 4 — Listas de favoritos</div>
+        <div class="wpage-title">Paso 3 de 5 — Listas de favoritos</div>
         <p class="wpage-desc">
           NextFarma organiza los genéricos en 6 categorías. Asigna cada categoría a la
-          lista de Farmatic correspondiente.
-        </p>
-        <p class="wpage-hint">
-          Nota — <strong>Utilidades → Listas de artículos</strong>. Si no usas
-          estas categorías, deja "— Sin asignar —" y el sync omitirá los favoritos.
+          lista de Farmatic correspondiente (crea las listas en <strong>Utilidades → Listas de artículos</strong> si no existen).
+          Si no usas esta funcionalidad deja "— Sin asignar —".
         </p>
         <div class="wizard-loading" id="w2-loading">Cargando listas desde Farmatic…</div>
         <div id="w2-error" class="wpage-error" style="display:none"></div>
@@ -385,15 +390,51 @@ ORDER  BY name</pre>
             </div>
           </div>
         </div>
+        <div class="wdiag-panel" id="wdiag-2">
+          <button class="wdiag-toggle" onclick="wizardDiag(2,'listas','¿No aparecen las listas correctas?')">
+            ¿No aparecen las listas esperadas? — Consultar Farmatic
+          </button>
+          <div class="wdiag-body" id="wdiag-body-2" style="display:none"></div>
+        </div>
         <div class="wizard-nav">
           <button class="btn btn-secondary" onclick="wizardNext(1)">← Anterior</button>
           <button class="btn btn-primary" onclick="wizardNext(3)">Siguiente →</button>
         </div>
       </div>
 
-      <!-- Step 3: Summary -->
+      <!-- Step 3: RGPD -->
       <div class="wpage" id="wp-3">
-        <div class="wpage-title">Paso 4 de 4 — Resumen</div>
+        <div class="wpage-title">Paso 4 de 5 — Consentimiento RGPD (Crónicos)</div>
+        <p class="wpage-desc">
+          El módulo de crónicos lee los pacientes con consentimiento RGPD activo.
+          El código estándar en Farmatic es <strong>31</strong>, pero puede variar.
+          Pulsa "Verificar" para confirmarlo contra tu base de datos.
+        </p>
+        <div class="wdiag-panel" id="wdiag-3" style="margin-bottom:10px">
+          <button class="wdiag-toggle" onclick="wizardDiag(3,'rgpd_opciones','Ver todos los códigos RGPD')">
+            ¿No sabes qué código usar? — Ver todos los códigos presentes en Farmatic
+          </button>
+          <div class="wdiag-body" id="wdiag-body-3" style="display:none"></div>
+        </div>
+        <div id="w3-form">
+          <div class="wlab-row" style="margin-top:8px">
+            <span class="wlab-name">Código OpcRGPD</span>
+            <input type="number" id="wz-rgpd-opcion" class="input" value="31" min="1" style="width:100px">
+          </div>
+          <div id="w3-rgpd-check" style="margin-top:12px;font-size:12px;color:#8b949e">
+            <button class="btn btn-secondary" onclick="wizardVerifyRGPD()" style="font-size:11px;padding:4px 10px">Verificar contra Farmatic</button>
+            <span id="w3-rgpd-result" style="margin-left:10px"></span>
+          </div>
+        </div>
+        <div class="wizard-nav">
+          <button class="btn btn-secondary" onclick="wizardNext(2)">← Anterior</button>
+          <button class="btn btn-primary" onclick="wizardNext(4)">Siguiente →</button>
+        </div>
+      </div>
+
+      <!-- Step 4: Summary -->
+      <div class="wpage" id="wp-4">
+        <div class="wpage-title">Paso 5 de 5 — Resumen</div>
         <div id="wizard-summary" class="wizard-summary"></div>
         <div class="wizard-nav">
           <button class="btn btn-secondary" onclick="wizardNext(2)">← Modificar</button>

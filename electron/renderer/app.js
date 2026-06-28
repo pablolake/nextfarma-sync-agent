@@ -10,7 +10,8 @@ const wz = {
   vendors: [],          // all vendors from Farmatic
   excludedIds: new Set(),
   labs: [],             // all lab codes from Farmatic
-  labCinfa: '', labNormon: '', labKern: '', labTeva: '',
+  labCinfa: '', labNormon: '', labKern: '', labTeva: '', labSecundarios: '',
+  opcRGPD: 31,
   scUmbral: 2500, scCN: 5, scKT: 10,
   lists: [],            // all lists from Farmatic
   listStar: null, listInc: null, listMrotA: null, listMrotB: null, listResto: null, listPar: null,
@@ -319,7 +320,6 @@ function addLogEntry(entry) {
   el.innerHTML =
     `<span class="log-ts">${time}</span>` +
     `<span class="log-level ${entry.level}">${(entry.level || 'info').toUpperCase()}</span>` +
-     +
     `<span class="log-msg">${escapeHtml(entry.msg || '')}</span>`;
 
   el.style.display = entryMatchesFilter(entry) ? '' : 'none';
@@ -428,6 +428,7 @@ async function wizardNext(step) {
     if (wz.step === 0) wizardCollectVendors();
     if (wz.step === 1) wizardCollectLabs();
     if (wz.step === 2) wizardCollectLists();
+    if (wz.step === 3) wizardCollectRGPD();
   }
 
   // Activate new step
@@ -444,7 +445,7 @@ async function wizardNext(step) {
   if (step === 0 && wz.vendors.length === 0) await wizardLoadVendors();
   if (step === 1 && wz.labs.length === 0)    await wizardLoadLabs();
   if (step === 2 && wz.lists.length === 0)   await wizardLoadLists();
-  if (step === 3) renderWizardSummary();
+  if (step === 4) renderWizardSummary();
 }
 
 async function wizardLoadVendors() {
@@ -538,13 +539,14 @@ async function wizardLoadLabs() {
 }
 
 function wizardCollectLabs() {
-  wz.labCinfa  = document.getElementById('wz-lab-cinfa').value;
-  wz.labNormon = document.getElementById('wz-lab-normon').value;
-  wz.labKern   = document.getElementById('wz-lab-kern').value;
-  wz.labTeva   = document.getElementById('wz-lab-teva').value;
-  wz.scUmbral  = parseFloat(document.getElementById('wz-sc-umbral').value) || 2500;
-  wz.scCN      = parseFloat(document.getElementById('wz-sc-cn').value)     || 5;
-  wz.scKT      = parseFloat(document.getElementById('wz-sc-kt').value)     || 10;
+  wz.labCinfa       = document.getElementById('wz-lab-cinfa').value;
+  wz.labNormon      = document.getElementById('wz-lab-normon').value;
+  wz.labKern        = document.getElementById('wz-lab-kern').value;
+  wz.labTeva        = document.getElementById('wz-lab-teva').value;
+  wz.labSecundarios = document.getElementById('wz-lab-secundarios').value.trim();
+  wz.scUmbral       = parseFloat(document.getElementById('wz-sc-umbral').value) || 2500;
+  wz.scCN           = parseFloat(document.getElementById('wz-sc-cn').value)     || 5;
+  wz.scKT           = parseFloat(document.getElementById('wz-sc-kt').value)     || 10;
 }
 
 async function wizardLoadLists() {
@@ -598,20 +600,73 @@ function wizardCollectLists() {
   wz.listPar   = parseInt(document.getElementById('wz-list-par').value)   || null;
 }
 
+async function wizardDiag(step, key, label) {
+  const btn  = document.querySelector(`#wdiag-${step} .wdiag-toggle`);
+  const body = document.getElementById(`wdiag-body-${step}`);
+  const isOpen = body.style.display !== 'none';
+  if (isOpen) { body.style.display = 'none'; btn.classList.remove('open'); return; }
+
+  btn.classList.add('open');
+  body.style.display = '';
+  body.innerHTML = `<div class="wdiag-status">Consultando Farmatic…</div>`;
+
+  const res = await window.sync.wizardRunDiagnostic(key);
+  if (!res.ok) {
+    body.innerHTML = `<div class="wdiag-status" style="color:#f85149">✗ ${escapeHtml(res.error)}</div>`;
+    return;
+  }
+  if (!res.rows || res.rows.length === 0) {
+    body.innerHTML = `<div class="wdiag-status">Sin resultados para esta consulta.</div>`;
+    return;
+  }
+  const cols = Object.keys(res.rows[0]);
+  const thead = `<tr>${cols.map(c => `<th>${escapeHtml(c)}</th>`).join('')}</tr>`;
+  const tbody = res.rows.map(row =>
+    `<tr>${cols.map(c => `<td>${escapeHtml(String(row[c] ?? ''))}</td>`).join('')}</tr>`
+  ).join('');
+  body.innerHTML = `
+    <div class="wdiag-status">${escapeHtml(res.desc)} — ${res.rows.length} fila${res.rows.length !== 1 ? 's' : ''}</div>
+    <div style="overflow-x:auto"><table class="wdiag-table"><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>`;
+}
+
+function wizardCollectRGPD() {
+  wz.opcRGPD = parseInt(document.getElementById('wz-rgpd-opcion').value) || 31;
+}
+
+async function wizardVerifyRGPD() {
+  const opcion = parseInt(document.getElementById('wz-rgpd-opcion').value) || 31;
+  const result = document.getElementById('w3-rgpd-result');
+  result.textContent = 'Verificando…';
+  result.style.color = '#8b949e';
+  const res = await window.sync.wizardVerifyRGPD(opcion);
+  if (!res.ok) {
+    result.textContent = '✗ Error: ' + res.error;
+    result.style.color = '#f85149';
+  } else if (res.count === 0) {
+    result.textContent = `⚠ 0 pacientes con OpcRGPD=${opcion}. Comprueba el valor.`;
+    result.style.color = '#e3964a';
+  } else {
+    result.textContent = `✓ ${res.count} paciente${res.count !== 1 ? 's' : ''} con consentimiento activo`;
+    result.style.color = '#3fb950';
+  }
+}
+
 function renderWizardSummary() {
   wizardCollectVendors();
   wizardCollectLabs();
   wizardCollectLists();
+  wizardCollectRGPD();
 
   const excl = wz.vendors
     .filter(v => wz.excludedIds.has(v.id))
     .map(v => `${v.nombre} (ID ${v.id})`);
 
   const labLines = [
-    wz.labCinfa  ? `CINFA → ${wz.labCinfa}`   : null,
-    wz.labNormon ? `NORMON → ${wz.labNormon}` : null,
-    wz.labKern   ? `KERN → ${wz.labKern}`     : null,
-    wz.labTeva   ? `TEVA → ${wz.labTeva}`     : null,
+    wz.labCinfa       ? `CINFA → ${wz.labCinfa}`             : null,
+    wz.labNormon      ? `NORMON → ${wz.labNormon}`           : null,
+    wz.labKern        ? `KERN → ${wz.labKern}`               : null,
+    wz.labTeva        ? `TEVA → ${wz.labTeva}`               : null,
+    wz.labSecundarios ? `Secundarios: ${wz.labSecundarios}` : null,
   ].filter(Boolean);
 
   const listMap = {
@@ -636,6 +691,7 @@ function renderWizardSummary() {
       `Umbral ${wz.scUmbral}€/mes · CINFA/NORMON ${wz.scCN}% · KERN/TEVA ${wz.scKT}%`),
     item('', 'Listas de favoritos',
       listLines.length ? listLines.join(' · ') : 'Sin asignar (favoritos omitidos)'),
+    item('', 'RGPD — Código consentimiento', `OpcRGPD = ${wz.opcRGPD}`),
   ].join('');
 
   function item(icon, label, value) {
@@ -653,13 +709,16 @@ async function wizardFinish() {
   wizardCollectVendors();
   wizardCollectLabs();
   wizardCollectLists();
+  wizardCollectRGPD();
 
   const wizardCfg = {
     excludedVendors:    [...wz.excludedIds],
-    labCinfa:           wz.labCinfa   || null,
-    labNormon:          wz.labNormon  || null,
-    labKern:            wz.labKern    || null,
-    labTeva:            wz.labTeva    || null,
+    labCinfa:           wz.labCinfa       || null,
+    labNormon:          wz.labNormon      || null,
+    labKern:            wz.labKern        || null,
+    labTeva:            wz.labTeva        || null,
+    labSecundarios:     wz.labSecundarios || null,
+    opcRGPD:            wz.opcRGPD        || 31,
     scUmbral:           wz.scUmbral,
     scCinfaNormon:      wz.scCN / 100,
     scKernTeva:         wz.scKT / 100,

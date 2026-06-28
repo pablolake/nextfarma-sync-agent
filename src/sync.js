@@ -67,7 +67,7 @@ async function runSync() {
   } catch (e) {
     err('API inalcanzable: ' + e.message);
     err('Sync cancelado: sin conexión con NextFarma.');
-    return;
+    return { ...resultados, elapsed: '0s' };
   }
 
   const anioActual   = new Date().getFullYear();
@@ -418,7 +418,7 @@ async function syncNuevosCronicos(farmaticPool, apiClient, log) {
         c.Telefono2 AS telefono2
       FROM ClienteRGPD r
       LEFT JOIN Cliente c ON CAST(c.IdCliente AS VARCHAR) = LTRIM(RTRIM(r.XClie_IdCliente))
-      WHERE r.OpcRGPD = 31
+      WHERE r.OpcRGPD = ${parseInt(process.env.RGPD_OPCION, 10) || 31}
     `).catch(err => { log.warn('RGPD query error:', err.message); return { recordset: [] }; });
 
     if (!result.recordset.length) return;

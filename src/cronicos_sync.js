@@ -129,7 +129,7 @@ async function syncCronicos(farmaticPool, apiClient, log) {
         INSERT OR REPLACE INTO cronicos_medicacion
           (id_farmatic, cn, descripcion, fecha_ultima_compra, fecha_estimada_salida, aviso_enviado)
         VALUES (?, ?, ?, ?, date(?, '+28 days'),
-          COALESCE((SELECT CASE WHEN fecha_ultima_compra < ? THEN aviso_enviado ELSE 0 END
+          COALESCE((SELECT CASE WHEN fecha_ultima_compra >= ? THEN aviso_enviado ELSE 0 END
                     FROM cronicos_medicacion WHERE id_farmatic=? AND cn=?), 0))
       `);
       const tx = db.transaction((rows) => {

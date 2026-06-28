@@ -44,6 +44,10 @@ function buildConfig() {
 
 let pool = null;
 async function getPool() {
+  if (pool) {
+    try { await pool.request().query('SELECT 1') }
+    catch { pool = null }
+  }
   if (!pool) pool = await new sql.ConnectionPool(buildConfig()).connect();
   return pool;
 }
@@ -148,7 +152,9 @@ async function fetchProductos() {
     WHERE a.Baja = 0
   `);
 
-  const LABS_SECUNDARIOS = new Set(['ABEX', 'RATIO']);
+  const LABS_SECUNDARIOS = new Set(
+    (process.env.LAB_SECUNDARIOS || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+  );
   const vistos = new Set();
   let descartados = { sinCN: 0, cnInvalido: 0, sinNombre: 0, pvpInvalido: 0, duplicado: 0, pvpSuperior: 0 };
 
@@ -478,21 +484,24 @@ async function fetch4DBDescuentos() {
   })).filter(r => /^\d{5,}$/.test(r.codigo_nacional));
 }
 
-// Lista IDs: configurable via env (set by wizard). Defaults match a standard Farmatic setup.
+// Lista IDs: configuradas por el wizard (paso Listas). Sin configurar → null (leer/escribir desactivado).
 function getListaCategoria() {
+  const keys = ['LIST_INCENTIVADOS_STAR','LIST_INCENTIVADOS','LIST_MAX_ROT_A','LIST_MAX_ROT_B','LIST_RESTO','LIST_PARADOS'];
+  if (keys.some(k => !process.env[k])) return null;
   return {
-    [parseInt(process.env.LIST_INCENTIVADOS_STAR) || 67]:  'INCENTIVADOS_STAR',
-    [parseInt(process.env.LIST_INCENTIVADOS)       || 102]: 'INCENTIVADOS',
-    [parseInt(process.env.LIST_MAX_ROT_A)          || 103]: 'MAX_ROTACION_A',
-    [parseInt(process.env.LIST_MAX_ROT_B)          || 104]: 'MAX_ROTACION_B',
-    [parseInt(process.env.LIST_RESTO)              || 105]: 'RESTO',
-    [parseInt(process.env.LIST_PARADOS)            || 106]: 'PARADOS',
+    [parseInt(process.env.LIST_INCENTIVADOS_STAR)]: 'INCENTIVADOS_STAR',
+    [parseInt(process.env.LIST_INCENTIVADOS)]:       'INCENTIVADOS',
+    [parseInt(process.env.LIST_MAX_ROT_A)]:          'MAX_ROTACION_A',
+    [parseInt(process.env.LIST_MAX_ROT_B)]:          'MAX_ROTACION_B',
+    [parseInt(process.env.LIST_RESTO)]:              'RESTO',
+    [parseInt(process.env.LIST_PARADOS)]:            'PARADOS',
   };
 }
 
 async function fetchFavoritosListas() {
-  const p    = await getPool();
   const lcat = getListaCategoria();
+  if (!lcat) { log.info('fetchFavoritosListas omitido: wizard Listas no configurado'); return []; }
+  const p    = await getPool();
   const ids  = Object.keys(lcat).join(',');
 
   const result = await p.request().query(`
@@ -526,8 +535,9 @@ async function fetchFavoritosListas() {
 }
 
 async function fetchFavoritosActuales() {
-  const p   = await getPool();
   const lcat = getListaCategoria();
+  if (!lcat) return new Map();
+  const p   = await getPool();
   const ids  = Object.keys(lcat).join(',');
   try {
     const result = await p.request().query(`
@@ -595,18 +605,25 @@ async function fetchVendedoresFarmatic() {
 }
 
 function getCategoriaLista() {
+  const keys = ['LIST_INCENTIVADOS_STAR','LIST_INCENTIVADOS','LIST_MAX_ROT_A','LIST_MAX_ROT_B','LIST_RESTO','LIST_PARADOS'];
+  if (keys.some(k => !process.env[k])) return null;
   return {
-    'INCENTIVADOS_STAR': parseInt(process.env.LIST_INCENTIVADOS_STAR) || 67,
-    'INCENTIVADOS':      parseInt(process.env.LIST_INCENTIVADOS)       || 102,
-    'MAX_ROTACION_A':    parseInt(process.env.LIST_MAX_ROT_A)          || 103,
-    'MAX_ROTACION_B':    parseInt(process.env.LIST_MAX_ROT_B)          || 104,
-    'RESTO':             parseInt(process.env.LIST_RESTO)              || 105,
-    'PARADOS':           parseInt(process.env.LIST_PARADOS)            || 106,
+    'INCENTIVADOS_STAR': parseInt(process.env.LIST_INCENTIVADOS_STAR),
+    'INCENTIVADOS':      parseInt(process.env.LIST_INCENTIVADOS),
+    'MAX_ROTACION_A':    parseInt(process.env.LIST_MAX_ROT_A),
+    'MAX_ROTACION_B':    parseInt(process.env.LIST_MAX_ROT_B),
+    'RESTO':             parseInt(process.env.LIST_RESTO),
+    'PARADOS':           parseInt(process.env.LIST_PARADOS),
   };
 }
 
 async function procesarCambiosPendientes(cambios) {
   if (!cambios || cambios.length === 0) return { procesados: 0, errores: 0, ids_procesados: [] };
+  const listas = getCategoriaLista();
+  if (!listas) {
+    log.warn('procesarCambiosPendientes omitido: completa el wizard (paso Listas) para activar escritura en Farmatic');
+    return { procesados: 0, errores: 0, ids_procesados: [] };
+  }
   const p = await getPool();
   let procesados = 0, errores = 0;
   const ids_procesados = [];
@@ -616,14 +633,14 @@ async function procesarCambiosPendientes(cambios) {
       const { ch, favorito_cn_nuevo, favorito_cn_anterior, categoria_nueva } = cambio;
 
       if (favorito_cn_nuevo && categoria_nueva) {
-        const listaDestino = getCategoriaLista()[categoria_nueva];
+        const listaDestino = listas[categoria_nueva];
         if (!listaDestino) {
           log.warn('Categoria desconocida: ' + categoria_nueva);
           errores++;
           continue;
         }
 
-        const listaIds = Object.values(getCategoriaLista()).join(',');
+        const listaIds = Object.values(listas).join(',');
 
         if (favorito_cn_anterior) {
           await p.request()
@@ -725,6 +742,86 @@ async function fetchListasWizard() {
   return r2.recordset.map(r => ({ id: Number(r.id), nombre: `Lista ${r.id}`, n_items: Number(r.n_items) }));
 }
 
+// Queries diagnóstico predefinidas (solo lectura). Clave → { sql, cols }
+const DIAGNOSTIC_QUERIES = {
+  vendedores: {
+    sql: `SELECT IdVendedor AS id, LTRIM(RTRIM(Nombre)) AS nombre FROM Vendedor ORDER BY IdVendedor`,
+    desc: 'Lista completa de vendedores en Farmatic',
+  },
+  laboratorios: {
+    sql: `
+      SELECT
+        LTRIM(RTRIM(p.IdProveedor)) AS codigo,
+        LTRIM(RTRIM(p.Nombre))      AS nombre,
+        COUNT(a.IdArticu)           AS n_articulos
+      FROM Proveedor p
+      LEFT JOIN Articu a
+        ON LTRIM(RTRIM(a.Laboratorio)) = LTRIM(RTRIM(p.IdProveedor)) AND a.Baja = 0
+      GROUP BY p.IdProveedor, p.Nombre
+      HAVING COUNT(a.IdArticu) > 0
+      ORDER BY n_articulos DESC`,
+    desc: 'Proveedores/laboratorios con artículos activos',
+  },
+  listas: {
+    sql: `
+      SELECT
+        l.IdLista                   AS id,
+        LTRIM(RTRIM(l.Nombre))      AS nombre,
+        COUNT(i.XItem_IdArticu)     AS n_items
+      FROM ListaArticu l
+      LEFT JOIN ItemListaArticu i ON i.XItem_IdLista = l.IdLista
+      GROUP BY l.IdLista, l.Nombre
+      ORDER BY l.IdLista`,
+    desc: 'Listas de artículos con nombre y número de ítems',
+    fallback: `
+      SELECT XItem_IdLista AS id, COUNT(*) AS n_items
+      FROM ItemListaArticu
+      GROUP BY XItem_IdLista
+      ORDER BY XItem_IdLista`,
+  },
+  rgpd_opciones: {
+    sql: `SELECT OpcRGPD AS opcion, COUNT(*) AS n_clientes FROM ClienteRGPD GROUP BY OpcRGPD ORDER BY n_clientes DESC`,
+    desc: 'Códigos RGPD presentes y número de clientes por código',
+  },
+  grupos_homogeneos: {
+    sql: `
+      SELECT TOP 10
+        bpj.CODCONJUNTO             AS ch,
+        LTRIM(RTRIM(bpj.NOMBRE))    AS nombre,
+        bpj.CODCCAA                 AS ccaa,
+        COUNT(bpc.CODIGO)           AS n_cns
+      FROM BP_CONJUNTOS bpj
+      LEFT JOIN BP_CONJARTI bpc ON bpc.CODConjunto = bpj.CODCONJUNTO
+      GROUP BY bpj.CODCONJUNTO, bpj.NOMBRE, bpj.CODCCAA
+      ORDER BY n_cns DESC`,
+    desc: 'Muestra de grupos homogéneos (top 10 por número de CNs)',
+  },
+};
+
+async function runDiagnostic(key) {
+  const q = DIAGNOSTIC_QUERIES[key];
+  if (!q) throw new Error(`Diagnóstico desconocido: ${key}`);
+  const p = await getPool();
+  try {
+    const r = await p.request().query(q.sql);
+    return { ok: true, rows: r.recordset, desc: q.desc };
+  } catch (e) {
+    if (q.fallback) {
+      const r2 = await p.request().query(q.fallback).catch(() => ({ recordset: [] }));
+      return { ok: true, rows: r2.recordset, desc: q.desc + ' (modo simplificado)' };
+    }
+    throw e;
+  }
+}
+
+async function fetchRGPDCount(opcion) {
+  const p = await getPool();
+  const r = await p.request().query(
+    `SELECT COUNT(*) AS n FROM ClienteRGPD WHERE OpcRGPD = ${parseInt(opcion, 10)}`
+  );
+  return Number(r.recordset[0]?.n ?? 0);
+}
+
 module.exports = {
   getPool,
   closePool,
@@ -742,6 +839,8 @@ module.exports = {
   fetchVendedoresWizard,
   fetchLabsWizard,
   fetchListasWizard,
+  fetchRGPDCount,
+  runDiagnostic,
   IVA_MEDICAMENTOS,
   RE,
   PVL_FACTOR,
