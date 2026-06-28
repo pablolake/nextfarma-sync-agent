@@ -556,3 +556,49 @@ header {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--surface2); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border); }
+
+/* ── Sync summary panel ───────────────────────────────────────────── */
+.sync-summary {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 10px 0 4px;
+}
+.summary-item {
+  display: flex; align-items: flex-start; gap: 8px;
+  font-size: 12px; padding: 5px 12px; border-radius: 5px;
+}
+.summary-ok    { background: #052e16; color: #86efac; }
+.summary-warn  { background: #1c1003; color: #fde68a; }
+.summary-error { background: #2d0a0a; color: #fca5a5; }
+.summary-icon  { flex-shrink: 0; font-weight: 700; width: 14px; }
+.summary-msg   { flex: 1; word-break: break-word; }
+.summary-elapsed {
+  font-size: 10px; color: var(--muted); text-align: right;
+  padding: 4px 12px 0; letter-spacing: .03em;
+}
+
+/* ── RGPD info wrap ───────────────────────────────────────────────── */
+.rgpd-info-wrap {
+  padding: 8px 16px 4px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+
+/* ── Log filters ──────────────────────────────────────────────────── */
+.log-toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+  padding: 8px 12px; border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.log-filters { display: flex; gap: 4px; flex-wrap: wrap; }
+.log-filter {
+  background: transparent; border: 1px solid var(--border);
+  color: var(--muted); border-radius: 4px; padding: 3px 10px;
+  font-size: 11px; cursor: pointer; transition: all .15s;
+}
+.log-filter:hover  { border-color: var(--primary); color: var(--primary); }
+.log-filter.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+
+/* Crónicos log entries */
+.log-cronicos { background: rgba(34, 197, 94, 0.04); }
+.log-tag-cronicos { flex-shrink: 0; margin-right: 2px; }

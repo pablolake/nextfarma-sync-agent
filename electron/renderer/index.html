@@ -75,6 +75,39 @@
         </div>
         <div class="card-badge" id="local-badge">—</div>
       </div>
+      <div class="card">
+        <div class="card-icon">🔒</div>
+        <div class="card-body">
+          <div class="card-title">Pacientes RGPD</div>
+          <div class="card-value" id="cronicos-status">—</div>
+        </div>
+        <div class="card-badge" id="cronicos-badge">—</div>
+      </div>
+    </div>
+
+    <!-- Resumen último sync -->
+    <div id="sync-summary-panel" style="display:none">
+      <div class="section-title">Último sync</div>
+      <div class="sync-summary" id="sync-summary"></div>
+    </div>
+
+    <!-- Info RGPD -->
+    <div class="rgpd-info-wrap">
+      <button class="btn-más-info" onclick="toggleInfo('rgpd-info')">+ ¿Qué datos se envían a NextFarma?</button>
+      <div class="field-info" id="rgpd-info">
+        <div class="field-info-text">
+          <strong>Datos que SÍ se sincronizan a la nube:</strong><br>
+          · Catálogo de productos y precios<br>
+          · Ventas mensuales por CN y vendedor (sin identificar al paciente)<br>
+          · Favoritos de listas de Farmatic<br>
+          · Avisos de medicación de pacientes con <strong>consentimiento RGPD firmado</strong> (OpcRGPD=31) — solo nombre, teléfono y días restantes<br><br>
+          <strong>Datos que NUNCA salen del PC:</strong><br>
+          · Historial completo de pacientes<br>
+          · Datos de pacientes <em>sin</em> consentimiento firmado<br>
+          · Números de receta y dispensaciones nominales<br><br>
+          <strong>Base legal:</strong> Art. 6.1.a RGPD — consentimiento explícito del interesado (formulario firmado en la farmacia). Solo se envían alertas activas (medicación con &lt;7 días de stock), no el historial completo.
+        </div>
+      </div>
     </div>
 
     <div class="section-title">Sincronización automática</div>
@@ -373,11 +406,19 @@ ORDER  BY name</pre>
   <!-- TAB: LOGS -->
   <section id="tab-logs" class="tab-content">
     <div class="log-toolbar">
-      <label class="checkbox-label small">
-        <input type="checkbox" id="log-autoscroll" checked> Auto-scroll
-      </label>
-      <button class="btn btn-sm btn-ghost" onclick="clearLogs()">Limpiar</button>
-      <button class="btn btn-sm btn-ghost" onclick="openLogsFolder()">📂 Carpeta de logs</button>
+      <div class="log-filters">
+        <button class="log-filter active" data-filter="all"    onclick="setLogFilter('all')">Todos</button>
+        <button class="log-filter"        data-filter="warn"   onclick="setLogFilter('warn')">⚠ Avisos</button>
+        <button class="log-filter"        data-filter="error"  onclick="setLogFilter('error')">✗ Errores</button>
+        <button class="log-filter"        data-filter="cronicos" onclick="setLogFilter('cronicos')">💊 Crónicos</button>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <label class="checkbox-label small">
+          <input type="checkbox" id="log-autoscroll" checked> Auto-scroll
+        </label>
+        <button class="btn btn-sm btn-ghost" onclick="clearLogs()">Limpiar</button>
+        <button class="btn btn-sm btn-ghost" onclick="openLogsFolder()">📂 Carpeta</button>
+      </div>
     </div>
     <div class="log-container" id="log-container"></div>
   </section>

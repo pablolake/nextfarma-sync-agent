@@ -8,8 +8,9 @@ contextBridge.exposeInMainWorld('sync', {
   runSyncNow:     ()       => ipcRenderer.invoke('run-sync-now'),
   startSync:      ()       => ipcRenderer.invoke('start-sync'),
   stopSync:       ()       => ipcRenderer.invoke('stop-sync'),
-  getStatus:      ()       => ipcRenderer.invoke('get-status'),
-  openLogsFolder: ()       => ipcRenderer.invoke('open-logs-folder'),
+  getStatus:        ()       => ipcRenderer.invoke('get-status'),
+  getCronicosStats: ()       => ipcRenderer.invoke('get-cronicos-stats'),
+  openLogsFolder:   ()       => ipcRenderer.invoke('open-logs-folder'),
 
   // Wizard
   wizardGetVendors: () => ipcRenderer.invoke('wizard-get-vendors'),

@@ -1,7 +1,8 @@
 /* ── State ──────────────────────────────────────────────────────────── */
-let syncEnabled = false;
-let nextSyncAt  = null;
+let syncEnabled  = false;
+let nextSyncAt   = null;
 let countdownTimer = null;
+let logFilter    = 'all';
 
 // Wizard state
 const wz = {
@@ -210,6 +211,8 @@ function updateSyncUI(s) {
   }
   // Update status cards
   checkLocalServer();
+  checkCronicosStats();
+  if (s.lastSyncResults) updateSyncSummary(s.lastSyncResults);
 }
 
 async function checkLocalServer() {
@@ -225,23 +228,103 @@ async function checkLocalServer() {
   }
 }
 
+/* ── Cronicos stats ──────────────────────────────────────────────────── */
+async function checkCronicosStats() {
+  const r = await window.sync.getCronicosStats();
+  const val = document.getElementById('cronicos-status');
+  const badge = document.getElementById('cronicos-badge');
+  if (!r.ok || r.total === 0) {
+    val.textContent = 'Sin BD local aún';
+    badge.className = 'card-badge';
+    badge.textContent = '—';
+    return;
+  }
+  val.textContent = `${r.consentidos} con consentimiento · ${r.total} total`;
+  if (r.pendientes > 0) {
+    badge.className = 'card-badge warn';
+    badge.textContent = `${r.pendientes} aviso${r.pendientes > 1 ? 's' : ''}`;
+  } else {
+    badge.className = 'card-badge ok';
+    badge.textContent = 'Al día';
+  }
+}
+
+/* ── Sync summary panel ──────────────────────────────────────────────── */
+function updateSyncSummary(results) {
+  const panel = document.getElementById('sync-summary-panel');
+  const container = document.getElementById('sync-summary');
+  if (!results) { panel.style.display = 'none'; return; }
+
+  const items = [];
+  results.ok.forEach(m    => items.push({ type: 'ok',    msg: m }));
+  results.warn.forEach(m  => items.push({ type: 'warn',  msg: m }));
+  results.error.forEach(m => items.push({ type: 'error', msg: m }));
+
+  if (!items.length) { panel.style.display = 'none'; return; }
+
+  container.innerHTML = items.map(({ type, msg }) =>
+    `<div class="summary-item summary-${type}">
+      <span class="summary-icon">${type === 'ok' ? '✓' : type === 'warn' ? '⚠' : '✗'}</span>
+      <span class="summary-msg">${escapeHtml(msg)}</span>
+    </div>`
+  ).join('');
+
+  if (results.elapsed) {
+    container.innerHTML += `<div class="summary-elapsed">Completado en ${results.elapsed}s</div>`;
+  }
+
+  panel.style.display = '';
+  // Also refresh cronicos stats after sync
+  checkCronicosStats();
+}
+
 /* ── Logs ────────────────────────────────────────────────────────────── */
 const MAX_LOG_ENTRIES = 500;
+
+function isCronicosEntry(msg) {
+  return /crónicos|cronicos|fideliz|RGPD|aviso|paciente/i.test(msg);
+}
+
+function entryMatchesFilter(entry) {
+  if (logFilter === 'all')     return true;
+  if (logFilter === 'error')   return entry.level === 'error';
+  if (logFilter === 'warn')    return entry.level === 'warn' || entry.level === 'error';
+  if (logFilter === 'cronicos') return isCronicosEntry(entry.msg || '');
+  return true;
+}
+
+function setLogFilter(filter) {
+  logFilter = filter;
+  document.querySelectorAll('.log-filter').forEach(b => {
+    b.classList.toggle('active', b.dataset.filter === filter);
+  });
+  // Show/hide existing entries
+  document.querySelectorAll('#log-container .log-entry').forEach(el => {
+    const level = el.dataset.level || 'info';
+    const msg   = el.dataset.msg   || '';
+    const visible = entryMatchesFilter({ level, msg });
+    el.style.display = visible ? '' : 'none';
+  });
+}
 
 function addLogEntry(entry) {
   const container = document.getElementById('log-container');
   const el        = document.createElement('div');
-  el.className    = 'log-entry';
+  const isCron    = isCronicosEntry(entry.msg || '');
+  el.className    = 'log-entry' + (isCron ? ' log-cronicos' : '');
+  el.dataset.level = entry.level || 'info';
+  el.dataset.msg   = entry.msg   || '';
 
   const time = entry.ts ? entry.ts.slice(11, 19) : '';
   el.innerHTML =
     `<span class="log-ts">${time}</span>` +
     `<span class="log-level ${entry.level}">${(entry.level || 'info').toUpperCase()}</span>` +
+    (isCron ? `<span class="log-tag-cronicos">💊</span>` : '') +
     `<span class="log-msg">${escapeHtml(entry.msg || '')}</span>`;
 
+  el.style.display = entryMatchesFilter(entry) ? '' : 'none';
   container.appendChild(el);
 
-  // Trim old entries
   while (container.children.length > MAX_LOG_ENTRIES) {
     container.removeChild(container.firstChild);
   }
@@ -249,11 +332,11 @@ function addLogEntry(entry) {
   const auto = document.getElementById('log-autoscroll');
   if (auto?.checked) container.scrollTop = container.scrollHeight;
 
-  // Also update status indicator if it's a sync marker
   if (entry.msg?.includes('═══')) {
     onSyncStatus({ running: true });
-  } else if (entry.msg?.includes('✨ Sincronización completada')) {
+  } else if (entry.msg?.includes('Sync completado')) {
     onSyncStatus({ running: false, lastSyncAt: new Date().toISOString() });
+    refreshStatus();
   }
 }
 

@@ -344,6 +344,7 @@ async function runSync() {
   } else {
     log.info(`Sync completado correctamente en ${elapsed}s`);
   }
+  return { ...resultados, elapsed };
 }
 
 async function syncEncargos() {

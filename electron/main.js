@@ -9,14 +9,15 @@ const store = new Store({ name: 'nextfarma-sync' });
 
 const API_BASE = process.env.OVERRIDE_API_BASE || 'https://nextfarma-api-production.up.railway.app';
 
-let mainWindow  = null;
-let tray        = null;
-let syncTimer   = null;
-let isSyncing   = false;
-let lastSyncAt  = null;
-let tenantName  = null;
-let syncEnabled = false;
+let mainWindow      = null;
+let tray            = null;
+let syncTimer       = null;
+let isSyncing       = false;
+let lastSyncAt      = null;
+let tenantName      = null;
+let syncEnabled     = false;
 let localServerStarted = false;
+let lastSyncResults = null;  // { ok: [], warn: [], error: [], elapsed }
 
 // ── Single instance lock ─────────────────────────────────────────────────────
 const gotLock = app.requestSingleInstanceLock();
@@ -74,7 +75,7 @@ async function runSyncOnce() {
   tray?.setToolTip('NextFarma Sync · sincronizando…');
   try {
     const { runSync } = require('../src/sync');
-    await runSync();
+    lastSyncResults = await runSync();
     lastSyncAt = new Date().toISOString();
     send('sync-status', { running: false, lastSyncAt });
     tray?.setToolTip('NextFarma Sync · activo');
@@ -188,7 +189,31 @@ ipcMain.handle('get-status', () => ({
   lastSyncAt,
   tenantName,
   syncEnabled,
+  lastSyncResults,
 }));
+
+ipcMain.handle('get-cronicos-stats', () => {
+  const path = require('path');
+  const dbPath = process.env.USERDATA_PATH
+    ? path.join(process.env.USERDATA_PATH, 'cronicos.db')
+    : path.join(__dirname, '..', 'src', 'cronicos.db');
+  try {
+    const Database = require('better-sqlite3');
+    const db = new Database(dbPath, { readonly: true });
+    const total      = db.prepare('SELECT COUNT(*) AS n FROM cronicos').get()?.n || 0;
+    const consentidos = db.prepare('SELECT COUNT(*) AS n FROM cronicos WHERE consentimiento=1').get()?.n || 0;
+    const pendientes = db.prepare(`
+      SELECT COUNT(DISTINCT id_farmatic) AS n FROM cronicos_medicacion
+      WHERE aviso_enviado=0
+        AND julianday(fecha_estimada_salida) - julianday('now') <= 7
+        AND julianday(fecha_estimada_salida) - julianday('now') >= -3
+    `).get()?.n || 0;
+    db.close();
+    return { ok: true, total, consentidos, pendientes };
+  } catch {
+    return { ok: false, total: 0, consentidos: 0, pendientes: 0 };
+  }
+});
 
 ipcMain.handle('open-logs-folder', () => {
   shell.openPath(app.getPath('userData'));
