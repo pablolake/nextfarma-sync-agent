@@ -138,11 +138,11 @@ async function testDbConnection() {
 async function syncNow() {
   const btn = document.getElementById('btn-sync-now');
   btn.disabled = true;
-  btn.textContent = '⏳ Sincronizando…';
+  btn.textContent = 'Sincronizando...';
   await window.sync.runSyncNow();
   setTimeout(() => {
     btn.disabled = false;
-    btn.textContent = '🔄 Sincronizar ahora';
+    btn.textContent = 'Sincronizar ahora';
   }, 3000);
 }
 
@@ -319,7 +319,7 @@ function addLogEntry(entry) {
   el.innerHTML =
     `<span class="log-ts">${time}</span>` +
     `<span class="log-level ${entry.level}">${(entry.level || 'info').toUpperCase()}</span>` +
-    (isCron ? `<span class="log-tag-cronicos">💊</span>` : '') +
+     +
     `<span class="log-msg">${escapeHtml(entry.msg || '')}</span>`;
 
   el.style.display = entryMatchesFilter(entry) ? '' : 'none';
@@ -458,7 +458,7 @@ async function wizardLoadVendors() {
   if (!res.ok) {
     const el = document.getElementById('w0-error');
     el.style.display  = '';
-    el.textContent = '⚠ No se pudo conectar a Farmatic: ' + res.error +
+    el.textContent = 'No se pudo conectar a Farmatic: ' + res.error +
       '\n\nAsegúrate de configurar la conexión SQL en la pestaña Configuración primero.';
     return;
   }
@@ -504,7 +504,7 @@ async function wizardLoadLabs() {
   if (!res.ok) {
     const el = document.getElementById('w1-error');
     el.style.display = '';
-    el.textContent   = '⚠ ' + res.error;
+    el.textContent   = res.error;
     return;
   }
 
@@ -558,7 +558,7 @@ async function wizardLoadLists() {
   if (!res.ok) {
     const el = document.getElementById('w2-error');
     el.style.display = '';
-    el.textContent   = '⚠ ' + res.error;
+    el.textContent   = res.error;
     return;
   }
 
@@ -628,14 +628,14 @@ function renderWizardSummary() {
 
   const container = document.getElementById('wizard-summary');
   container.innerHTML = [
-    item('👥', 'Vendedores excluidos',
-      excl.length ? excl.join(', ') : '⚠ Ninguno seleccionado (se incluirán todos)'),
-    item('🧪', 'Laboratorios SC',
-      labLines.length ? labLines.join(' · ') : '⚠ Sin configurar (SC no se calculará)'),
-    item('📊', 'Umbrales SC',
+    item('', 'Vendedores excluidos',
+      excl.length ? excl.join(', ') : 'Ninguno seleccionado (se incluirán todos)'),
+    item('', 'Laboratorios SC',
+      labLines.length ? labLines.join(' · ') : 'Sin configurar (SC no se calculará)'),
+    item('', 'Umbrales SC',
       `Umbral ${wz.scUmbral}€/mes · CINFA/NORMON ${wz.scCN}% · KERN/TEVA ${wz.scKT}%`),
-    item('📋', 'Listas de favoritos',
-      listLines.length ? listLines.join(' · ') : '⚠ Sin asignar (favoritos omitidos)'),
+    item('', 'Listas de favoritos',
+      listLines.length ? listLines.join(' · ') : 'Sin asignar (favoritos omitidos)'),
   ].join('');
 
   function item(icon, label, value) {

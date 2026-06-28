@@ -33,7 +33,7 @@
     <div class="info-bar-right">
       <span id="last-sync-label">Sin sincronizar aún</span>
       <button class="btn btn-sm btn-primary" id="btn-sync-now" onclick="syncNow()">
-        🔄 Sincronizar ahora
+        Sincronizar ahora
       </button>
     </div>
   </div>
@@ -52,7 +52,7 @@
   <section id="tab-estado" class="tab-content active">
     <div class="cards">
       <div class="card">
-        <div class="card-icon">🌐</div>
+        
         <div class="card-body">
           <div class="card-title">API NextFarma</div>
           <div class="card-value" id="api-status">—</div>
@@ -60,7 +60,7 @@
         <div class="card-badge" id="api-badge">—</div>
       </div>
       <div class="card">
-        <div class="card-icon">🗄️</div>
+        
         <div class="card-body">
           <div class="card-title">Farmatic SQL Server</div>
           <div class="card-value" id="db-status">—</div>
@@ -68,7 +68,7 @@
         <div class="card-badge" id="db-badge">—</div>
       </div>
       <div class="card">
-        <div class="card-icon">🏠</div>
+        
         <div class="card-body">
           <div class="card-title">Servidor local (crónicos)</div>
           <div class="card-value" id="local-status">localhost:3001</div>
@@ -76,7 +76,7 @@
         <div class="card-badge" id="local-badge">—</div>
       </div>
       <div class="card">
-        <div class="card-icon">🔒</div>
+        
         <div class="card-body">
           <div class="card-title">Pacientes RGPD</div>
           <div class="card-value" id="cronicos-status">—</div>
@@ -289,7 +289,7 @@ ORDER  BY name</pre>
           de ventas del equipo.
         </p>
         <p class="wpage-hint">
-          💡 En Farmatic: <strong>Ficheros → Vendedores</strong>. El de "Autoconsumo" o
+          Nota — <strong>Ficheros → Vendedores</strong>. El de "Autoconsumo" o
           "Sistema" suele tener ID 99 o 1.
         </p>
         <div class="wizard-loading" id="w0-loading">Cargando vendedores desde Farmatic…</div>
@@ -309,7 +309,7 @@ ORDER  BY name</pre>
           tu Farmatic para CINFA, NORMON, KERN y TEVA. Selecciona el código de cada uno.
         </p>
         <p class="wpage-hint">
-          💡 En Farmatic: <strong>Ficheros → Proveedores</strong>. Busca los laboratorios de
+          Nota — <strong>Ficheros → Proveedores</strong>. Busca los laboratorios de
           genéricos. Si no trabajas con alguno, deja "— No usar —".
         </p>
         <div class="wizard-loading" id="w1-loading">Cargando laboratorios desde Farmatic…</div>
@@ -358,7 +358,7 @@ ORDER  BY name</pre>
           lista de Farmatic correspondiente.
         </p>
         <p class="wpage-hint">
-          💡 En Farmatic: <strong>Utilidades → Listas de artículos</strong>. Si no usas
+          Nota — <strong>Utilidades → Listas de artículos</strong>. Si no usas
           estas categorías, deja "— Sin asignar —" y el sync omitirá los favoritos.
         </p>
         <div class="wizard-loading" id="w2-loading">Cargando listas desde Farmatic…</div>
@@ -397,7 +397,7 @@ ORDER  BY name</pre>
         <div id="wizard-summary" class="wizard-summary"></div>
         <div class="wizard-nav">
           <button class="btn btn-secondary" onclick="wizardNext(2)">← Modificar</button>
-          <button class="btn btn-primary btn-lg" onclick="wizardFinish()">✓ Guardar configuración</button>
+          <button class="btn btn-primary btn-lg" onclick="wizardFinish()">Guardar configuracion</button>
         </div>
       </div>
     </div>
@@ -408,16 +408,16 @@ ORDER  BY name</pre>
     <div class="log-toolbar">
       <div class="log-filters">
         <button class="log-filter active" data-filter="all"    onclick="setLogFilter('all')">Todos</button>
-        <button class="log-filter"        data-filter="warn"   onclick="setLogFilter('warn')">⚠ Avisos</button>
-        <button class="log-filter"        data-filter="error"  onclick="setLogFilter('error')">✗ Errores</button>
-        <button class="log-filter"        data-filter="cronicos" onclick="setLogFilter('cronicos')">💊 Crónicos</button>
+        <button class="log-filter"        data-filter="warn"   onclick="setLogFilter('warn')">Avisos</button>
+        <button class="log-filter"        data-filter="error"  onclick="setLogFilter('error')">Errores</button>
+        <button class="log-filter"        data-filter="cronicos" onclick="setLogFilter('cronicos')">Cronicos</button>
       </div>
       <div style="display:flex;gap:8px;align-items:center">
         <label class="checkbox-label small">
           <input type="checkbox" id="log-autoscroll" checked> Auto-scroll
         </label>
         <button class="btn btn-sm btn-ghost" onclick="clearLogs()">Limpiar</button>
-        <button class="btn btn-sm btn-ghost" onclick="openLogsFolder()">📂 Carpeta</button>
+        <button class="btn btn-sm btn-ghost" onclick="openLogsFolder()">Carpeta</button>
       </div>
     </div>
     <div class="log-container" id="log-container"></div>
