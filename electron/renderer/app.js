@@ -423,15 +423,16 @@ function updateCountdown(secs) {
 /* ── Wizard ──────────────────────────────────────────────────────────── */
 
 async function wizardNext(step) {
-  // Validate current step before advancing
+  // Recopilar datos del paso actual antes de avanzar
   if (step > wz.step) {
     if (wz.step === 0) wizardCollectVendors();
     if (wz.step === 1) wizardCollectLabs();
     if (wz.step === 2) wizardCollectLists();
     if (wz.step === 3) wizardCollectRGPD();
+    // paso 4 (verificación) no requiere recoger datos
   }
 
-  // Activate new step
+  // Activar nueva página y actualizar barra de progreso
   document.querySelectorAll('.wpage').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.wstep').forEach((el, i) => {
     el.classList.remove('active', 'done');
@@ -441,11 +442,21 @@ async function wizardNext(step) {
   document.getElementById('wp-' + step).classList.add('active');
   wz.step = step;
 
-  // Load data if needed
+  // Cargar datos al llegar al paso correspondiente
   if (step === 0 && wz.vendors.length === 0) await wizardLoadVendors();
   if (step === 1 && wz.labs.length === 0)    await wizardLoadLabs();
   if (step === 2 && wz.lists.length === 0)   await wizardLoadLists();
-  if (step === 4) renderWizardSummary();
+  if (step === 5) renderWizardSummary();
+}
+
+// Lanza los 4 diagnósticos del paso 5 de una sola vez
+async function wizardDiagAll() {
+  await Promise.all([
+    wizardDiag('4a', 'ventas_recientes',    'Ventas últimos 30 días'),
+    wizardDiag('4b', 'encargos_activos',    'Encargos activos'),
+    wizardDiag('4c', 'recepciones_recientes','Últimas recepciones'),
+    wizardDiag('4d', 'grupos_homogeneos',   'Grupos homogéneos'),
+  ]);
 }
 
 async function wizardLoadVendors() {

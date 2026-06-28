@@ -96,7 +96,39 @@ Estos valores afectan solo al **cálculo del coste real** mostrado en los análi
 
 ---
 
-## Paso 5 — Resumen
+## Paso 5 — Verificación de tablas
+
+**Qué hace:** Antes de guardar la configuración, este paso permite comprobar que las cuatro fuentes de datos principales de Farmatic son accesibles y contienen información. Si alguna consulta falla, el sync no podrá leer esos datos y el módulo correspondiente en NextFarma no funcionará.
+
+Pulsa **"Verificar todo de una vez"** para lanzar las cuatro consultas simultáneamente, o usa cada botón individualmente.
+
+### Ventas (últimos 30 días por vendedor)
+
+Verifica que las tablas `Venta` y `LineaVenta` son accesibles. Muestra el número de tickets y unidades vendidas por vendedor en los últimos 30 días. Si el resultado está vacío:
+- Comprueba que el periodo tiene ventas en Farmatic.
+- Verifica que el usuario SQL tiene permisos de lectura sobre estas tablas.
+- Si la columna `Facturada` no existe en tu versión de Farmatic, el sync la omite automáticamente.
+
+### Encargos activos
+
+Verifica la tabla `Encargo`. Muestra los pedidos pendientes de recogida. Estos se sincronizan a NextFarma como **tareas de tipo "Pedidos"**, permitiendo al equipo gestionarlos desde la app. Si la tabla está vacía es normal si no hay encargos activos. Si da error, el módulo de tareas de encargos no funcionará.
+
+### Recepciones recientes (últimos 90 días)
+
+Verifica las tablas `Recep` y `LineaRecep`. Muestra los últimos albaranes de compra recibidos. Los datos de recepciones se usan para calcular el **precio de coste real** de cada producto. Si falla:
+- Puede ser que las columnas de precio tengan nombres distintos en tu versión de Farmatic (`PrecioNeto`, `Precio`, `PrecioUnitario`…). El sync las detecta automáticamente.
+- Si la consulta completa falla, usa la versión simplificada que se activa como fallback.
+
+### Grupos homogéneos (Base de datos del Consejo)
+
+Verifica las tablas `BP_CONJUNTOS` y `BP_CONJARTI` en la base de datos del Consejo General (`Consejo` por defecto, configurable en **Configuración → Base de datos**). Muestra los primeros grupos homogéneos disponibles con el número de CNs por grupo. Si falla:
+- La base de datos `Consejo` debe estar en el **mismo servidor SQL Server** que Farmatic.
+- Si el nombre de la BD es diferente (p.ej. `Consejo2` o `Vademecum`), cámbialo en **Configuración → Base de datos → BD Consejo**.
+- Sin esta base de datos, el campo `grupo_homogéneo` (ch) quedará vacío y los genéricos no se podrán agrupar en NextFarma.
+
+---
+
+## Paso 6 — Resumen
 
 Muestra un resumen de toda la configuración antes de guardar. Revisa que todos los datos son correctos y pulsa **"Guardar configuración"**.
 
@@ -121,3 +153,7 @@ Si se cambia la conexión a la base de datos (servidor, usuario, contraseña), e
 | Los favoritos no se actualizan en Farmatic | Listas no configuradas | Paso 3 → asignar listas a las 6 categorías |
 | El cálculo de SC siempre es 0 | Labs no mapeados o umbral no alcanzado | Paso 2 → verificar códigos de laboratorio |
 | Los análisis incluyen ventas de autoconsumo | Vendedor de sistema no excluido | Paso 1 → marcar el vendedor correcto |
+| Los genéricos no tienen grupo homogéneo (ch) | BD Consejo no accesible | Paso 5 → verificar tabla grupos homogéneos |
+| Las tareas de encargo no aparecen en NextFarma | Tabla Encargo vacía o sin permisos | Paso 5 → verificar diagnóstico encargos |
+| Los precios de coste parecen incorrectos | Recepciones no se leen correctamente | Paso 5 → verificar diagnóstico recepciones |
+| Los empleados no aparecen en el módulo Equipo | Todos los vendedores excluidos | Paso 1 → revisar qué vendedores están marcados |

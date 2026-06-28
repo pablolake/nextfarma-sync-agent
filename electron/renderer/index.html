@@ -276,13 +276,23 @@ ORDER  BY name</pre>
         <div class="wstep-line"></div>
         <div class="wstep" id="ws-3">
           <span class="wstep-num">4</span>
+          <span class="wstep-lbl">RGPD</span>
+        </div>
+        <div class="wstep-line"></div>
+        <div class="wstep" id="ws-4">
+          <span class="wstep-num">5</span>
+          <span class="wstep-lbl">Tablas</span>
+        </div>
+        <div class="wstep-line"></div>
+        <div class="wstep" id="ws-5">
+          <span class="wstep-num">6</span>
           <span class="wstep-lbl">Resumen</span>
         </div>
       </div>
 
       <!-- Step 0: Vendedores -->
       <div class="wpage active" id="wp-0">
-        <div class="wpage-title">Paso 1 de 5 — Vendedores a excluir</div>
+        <div class="wpage-title">Paso 1 de 6 — Vendedores a excluir</div>
         <p class="wpage-desc">
           Farmatic tiene un <strong>vendedor de sistema</strong> que registra ventas internas
           (bajas de stock, autoconsumo…). Marca los que deben <em>excluirse</em> del análisis
@@ -305,7 +315,7 @@ ORDER  BY name</pre>
 
       <!-- Step 1: Labs SC -->
       <div class="wpage" id="wp-1">
-        <div class="wpage-title">Paso 2 de 5 — Laboratorios de Selección de Genéricos</div>
+        <div class="wpage-title">Paso 2 de 6 — Laboratorios de Selección de Genéricos</div>
         <p class="wpage-desc">
           Para calcular los rappels de SC necesitamos saber qué código de proveedor usa
           tu Farmatic para CINFA, NORMON, KERN y TEVA. Selecciona el código de cada uno.
@@ -360,7 +370,7 @@ ORDER  BY name</pre>
 
       <!-- Step 2: Listas -->
       <div class="wpage" id="wp-2">
-        <div class="wpage-title">Paso 3 de 5 — Listas de favoritos</div>
+        <div class="wpage-title">Paso 3 de 6 — Listas de favoritos</div>
         <p class="wpage-desc">
           NextFarma organiza los genéricos en 6 categorías. Asigna cada categoría a la
           lista de Farmatic correspondiente (crea las listas en <strong>Utilidades → Listas de artículos</strong> si no existen).
@@ -404,7 +414,7 @@ ORDER  BY name</pre>
 
       <!-- Step 3: RGPD -->
       <div class="wpage" id="wp-3">
-        <div class="wpage-title">Paso 4 de 5 — Consentimiento RGPD (Crónicos)</div>
+        <div class="wpage-title">Paso 4 de 6 — Consentimiento RGPD (Crónicos)</div>
         <p class="wpage-desc">
           El módulo de crónicos lee los pacientes con consentimiento RGPD activo.
           El código estándar en Farmatic es <strong>31</strong>, pero puede variar.
@@ -432,12 +442,62 @@ ORDER  BY name</pre>
         </div>
       </div>
 
-      <!-- Step 4: Summary -->
+      <!-- Step 4: Verificación de tablas -->
       <div class="wpage" id="wp-4">
-        <div class="wpage-title">Paso 5 de 5 — Resumen</div>
+        <div class="wpage-title">Paso 5 de 6 — Verificación de tablas</div>
+        <p class="wpage-desc">
+          Comprueba que las tablas principales de Farmatic son accesibles y tienen datos.
+          Usa los botones para consultar cada área directamente contra tu base de datos.
+        </p>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+          <button class="btn btn-secondary btn-sm" onclick="wizardDiagAll()">Verificar todo de una vez</button>
+        </div>
+
+        <!-- Ventas -->
+        <div class="wdiag-panel" id="wdiag-4a">
+          <button class="wdiag-toggle" onclick="wizardDiag('4a','ventas_recientes','Ventas últimos 30 días')">
+            Ventas — ¿Se están leyendo tickets por vendedor?
+          </button>
+          <div class="wdiag-body" id="wdiag-body-4a" style="display:none"></div>
+        </div>
+
+        <!-- Encargos -->
+        <div class="wdiag-panel" id="wdiag-4b">
+          <button class="wdiag-toggle" onclick="wizardDiag('4b','encargos_activos','Encargos activos en Farmatic')">
+            Encargos — Pedidos pendientes de recogida (Tareas en NextFarma)
+          </button>
+          <div class="wdiag-body" id="wdiag-body-4b" style="display:none"></div>
+        </div>
+
+        <!-- Recepciones -->
+        <div class="wdiag-panel" id="wdiag-4c">
+          <button class="wdiag-toggle" onclick="wizardDiag('4c','recepciones_recientes','Últimas recepciones')">
+            Recepciones — Albaranes de compra recientes (precios reales)
+          </button>
+          <div class="wdiag-body" id="wdiag-body-4c" style="display:none"></div>
+        </div>
+
+        <!-- Grupos homogéneos / Consejo -->
+        <div class="wdiag-panel" id="wdiag-4d">
+          <button class="wdiag-toggle" onclick="wizardDiag('4d','grupos_homogeneos','Grupos homogéneos del Consejo')">
+            Base Consejo — Grupos homogéneos disponibles para mapeo de genéricos
+          </button>
+          <div class="wdiag-body" id="wdiag-body-4d" style="display:none"></div>
+        </div>
+
+        <div class="wizard-nav">
+          <button class="btn btn-secondary" onclick="wizardNext(3)">← Anterior</button>
+          <button class="btn btn-primary" onclick="wizardNext(5)">Siguiente →</button>
+        </div>
+      </div>
+
+      <!-- Step 5: Summary -->
+      <div class="wpage" id="wp-5">
+        <div class="wpage-title">Paso 6 de 6 — Resumen</div>
         <div id="wizard-summary" class="wizard-summary"></div>
         <div class="wizard-nav">
-          <button class="btn btn-secondary" onclick="wizardNext(2)">← Modificar</button>
+          <button class="btn btn-secondary" onclick="wizardNext(3)">← Modificar</button>
           <button class="btn btn-primary btn-lg" onclick="wizardFinish()">Guardar configuracion</button>
         </div>
       </div>

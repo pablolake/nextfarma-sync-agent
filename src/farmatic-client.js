@@ -742,7 +742,7 @@ async function fetchListasWizard() {
   return r2.recordset.map(r => ({ id: Number(r.id), nombre: `Lista ${r.id}`, n_items: Number(r.n_items) }));
 }
 
-// Queries diagnóstico predefinidas (solo lectura). Clave → { sql, cols }
+// Queries diagnóstico predefinidas (solo lectura). Clave → { sql | () => sql, desc, fallback? }
 const DIAGNOSTIC_QUERIES = {
   vendedores: {
     sql: `SELECT IdVendedor AS id, LTRIM(RTRIM(Nombre)) AS nombre FROM Vendedor ORDER BY IdVendedor`,
@@ -784,17 +784,72 @@ const DIAGNOSTIC_QUERIES = {
     desc: 'Códigos RGPD presentes y número de clientes por código',
   },
   grupos_homogeneos: {
+    // sql como función para insertar el nombre de BD Consejo en tiempo de ejecución
+    sql: () => `
+      SELECT TOP 10
+        bpj.CODCONJUNTO                    AS ch,
+        LTRIM(RTRIM(bpj.NOMBRE))           AS nombre,
+        COUNT(bpc.CODIGO)                  AS n_cns
+      FROM ${CONSEJO_DB()}.dbo.BP_CONJUNTOS bpj
+      LEFT JOIN ${CONSEJO_DB()}.dbo.BP_CONJARTI bpc
+        ON bpc.CODConjunto = bpj.CODCONJUNTO AND bpc.CODCCAA = 0
+      WHERE bpj.CODCCAA = 0
+      GROUP BY bpj.CODCONJUNTO, bpj.NOMBRE
+      ORDER BY n_cns DESC`,
+    desc: 'Grupos homogéneos en la base de datos del Consejo General',
+  },
+  ventas_recientes: {
     sql: `
       SELECT TOP 10
-        bpj.CODCONJUNTO             AS ch,
-        LTRIM(RTRIM(bpj.NOMBRE))    AS nombre,
-        bpj.CODCCAA                 AS ccaa,
-        COUNT(bpc.CODIGO)           AS n_cns
-      FROM BP_CONJUNTOS bpj
-      LEFT JOIN BP_CONJARTI bpc ON bpc.CODConjunto = bpj.CODCONJUNTO
-      GROUP BY bpj.CODCONJUNTO, bpj.NOMBRE, bpj.CODCCAA
-      ORDER BY n_cns DESC`,
-    desc: 'Muestra de grupos homogéneos (top 10 por número de CNs)',
+        v.XVend_IdVendedor            AS vendedor_id,
+        LTRIM(RTRIM(ve.Nombre))       AS vendedor,
+        COUNT(DISTINCT v.IdVenta)     AS n_tickets,
+        SUM(lv.Cantidad)              AS n_unidades
+      FROM Venta v
+      JOIN LineaVenta lv ON lv.XVenta_IdVenta = v.IdVenta
+      LEFT JOIN Vendedor ve ON ve.IdVendedor = v.XVend_IdVendedor
+      WHERE v.FechaHora >= DATEADD(day, -30, GETDATE())
+      GROUP BY v.XVend_IdVendedor, ve.Nombre
+      ORDER BY n_tickets DESC`,
+    desc: 'Ventas de los últimos 30 días por vendedor',
+  },
+  encargos_activos: {
+    sql: `
+      SELECT TOP 20
+        e.IdEncargo                             AS id,
+        LTRIM(RTRIM(e.Codigo))                  AS cn,
+        LEFT(LTRIM(RTRIM(
+          COALESCE((SELECT TOP 1 LTRIM(RTRIM(a.Descripcion))
+                    FROM Articu a WHERE a.IdArticu = e.Codigo), e.Codigo)
+        )), 40)                                 AS descripcion,
+        e.Cantidad                              AS uds,
+        CONVERT(varchar, e.FechaRecepcion, 103) AS fecha
+      FROM Encargo e
+      WHERE e.Cantidad > 0
+      ORDER BY e.FechaRecepcion DESC`,
+    desc: 'Encargos activos pendientes de recogida',
+  },
+  recepciones_recientes: {
+    sql: `
+      SELECT TOP 10
+        r.IdRecep                              AS id,
+        CONVERT(varchar, r.FechaRecep, 103)    AS fecha,
+        LTRIM(RTRIM(COALESCE(p.Nombre, r.XProv_IdProveedor))) AS proveedor,
+        COUNT(lr.Codigo)                       AS n_lineas,
+        SUM(lr.Cantidad)                       AS n_uds
+      FROM Recep r
+      LEFT JOIN Proveedor p ON p.IdProveedor = r.XProv_IdProveedor
+      JOIN LineaRecep lr ON lr.XRecep_IdRecep = r.IdRecep
+      WHERE r.FechaRecep >= DATEADD(day, -90, GETDATE())
+      GROUP BY r.IdRecep, r.FechaRecep, p.Nombre, r.XProv_IdProveedor
+      ORDER BY r.FechaRecep DESC`,
+    desc: 'Últimas recepciones de los 90 días anteriores',
+    fallback: `
+      SELECT TOP 10
+        IdRecep AS id,
+        CONVERT(varchar, FechaRecep, 103) AS fecha
+      FROM Recep
+      ORDER BY FechaRecep DESC`,
   },
 };
 
@@ -802,8 +857,10 @@ async function runDiagnostic(key) {
   const q = DIAGNOSTIC_QUERIES[key];
   if (!q) throw new Error(`Diagnóstico desconocido: ${key}`);
   const p = await getPool();
+  // sql puede ser string estático o función que devuelve string (para queries con vars de entorno)
+  const sql = typeof q.sql === 'function' ? q.sql() : q.sql;
   try {
-    const r = await p.request().query(q.sql);
+    const r = await p.request().query(sql);
     return { ok: true, rows: r.recordset, desc: q.desc };
   } catch (e) {
     if (q.fallback) {
