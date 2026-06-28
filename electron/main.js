@@ -35,9 +35,10 @@ function applyConfig(cfg) {
   process.env.DB_USER       = cfg.db?.user     || 'sa';
   process.env.DB_PASSWORD   = cfg.db?.password || '';
   process.env.DB_PORT       = String(cfg.db?.port || 1433);
-  process.env.DB_INSTANCE   = cfg.db?.instance || '';
-  process.env.DB_ENCRYPT    = 'false';
-  process.env.DB_TRUST_CERT = 'true';
+  process.env.DB_INSTANCE     = cfg.db?.instance    || '';
+  process.env.DB_WINDOWS_AUTH = String(cfg.db?.windowsAuth === true);
+  process.env.DB_ENCRYPT      = 'false';
+  process.env.DB_TRUST_CERT   = 'true';
   process.env.BATCH_SIZE    = '500';
   process.env.LOG_LEVEL     = 'info';
   process.env.USERDATA_PATH = app.getPath('userData');
@@ -115,8 +116,7 @@ function startLocalServerIfNeeded() {
   try {
     const { startLocalServer } = require('../src/local-server');
     const log = require('../src/logger');
-    startLocalServer(log);
-    localServerStarted = true;
+    startLocalServer(log, () => { localServerStarted = true; });
   } catch (err) {
     console.error('Error iniciando servidor local:', err.message);
   }
@@ -150,18 +150,19 @@ ipcMain.handle('test-api-key', async (_, apiKey) => {
 ipcMain.handle('test-db', async (_, dbCfg) => {
   const farmatic = require('../src/farmatic-client');
   const prevEnv  = {
-    DB_SERVER: process.env.DB_SERVER, DB_NAME:   process.env.DB_NAME,
-    DB_USER:   process.env.DB_USER,   DB_PASSWORD: process.env.DB_PASSWORD,
-    DB_PORT:   process.env.DB_PORT,   DB_INSTANCE: process.env.DB_INSTANCE,
-    DB_CONSEJO: process.env.DB_CONSEJO,
+    DB_SERVER: process.env.DB_SERVER, DB_NAME:        process.env.DB_NAME,
+    DB_USER:   process.env.DB_USER,   DB_PASSWORD:    process.env.DB_PASSWORD,
+    DB_PORT:   process.env.DB_PORT,   DB_INSTANCE:    process.env.DB_INSTANCE,
+    DB_CONSEJO: process.env.DB_CONSEJO, DB_WINDOWS_AUTH: process.env.DB_WINDOWS_AUTH,
   };
-  process.env.DB_SERVER   = dbCfg.server   || 'localhost';
-  process.env.DB_NAME     = dbCfg.name     || 'Farmatic';
-  process.env.DB_CONSEJO  = dbCfg.consejo  || 'Consejo';
-  process.env.DB_USER     = dbCfg.user     || 'sa';
-  process.env.DB_PASSWORD = dbCfg.password || '';
-  process.env.DB_PORT     = String(dbCfg.port || 1433);
-  process.env.DB_INSTANCE = dbCfg.instance || '';
+  process.env.DB_SERVER       = dbCfg.server   || 'localhost';
+  process.env.DB_NAME         = dbCfg.name     || 'Farmatic';
+  process.env.DB_CONSEJO      = dbCfg.consejo  || 'Consejo';
+  process.env.DB_USER         = dbCfg.user     || 'sa';
+  process.env.DB_PASSWORD     = dbCfg.password || '';
+  process.env.DB_PORT         = String(dbCfg.port || 1433);
+  process.env.DB_INSTANCE     = dbCfg.instance || '';
+  process.env.DB_WINDOWS_AUTH = String(dbCfg.windowsAuth === true);
   try {
     await farmatic.closePool();
     const tablas = await farmatic.verificarTablas();
@@ -333,10 +334,19 @@ function createTray() {
     icon = nativeImage.createFromPath(path.join(__dirname, 'tray-icon.png'));
     if (icon.isEmpty()) throw new Error('empty');
   } catch {
-    // Fallback: 1×1 transparent pixel
-    icon = nativeImage.createFromDataURL(
-      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
-    );
+    // Fallback: cuadrado 16×16 azul oscuro generado en memoria (BGRA: B=129 G=76 R=15 A=255)
+    try {
+      const size = 16;
+      const buf  = Buffer.alloc(size * size * 4);
+      for (let i = 0; i < size * size; i++) {
+        buf[i*4] = 129; buf[i*4+1] = 76; buf[i*4+2] = 15; buf[i*4+3] = 255;
+      }
+      icon = nativeImage.createFromBitmap(buf, { width: size, height: size });
+    } catch {
+      icon = nativeImage.createFromDataURL(
+        'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+      );
+    }
   }
   tray = new Tray(icon);
   tray.setToolTip('NextFarma Sync');

@@ -5,8 +5,9 @@ const EventEmitter = require('events');
 const emitter = new EventEmitter();
 emitter.setMaxListeners(20);
 
-const LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
-const LEVEL  = LEVELS[(process.env.LOG_LEVEL || 'info').toLowerCase()] ?? 1;
+const LEVELS       = { debug: 0, info: 1, warn: 2, error: 3 };
+const LEVEL        = LEVELS[(process.env.LOG_LEVEL || 'info').toLowerCase()] ?? 1;
+const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5 MB — rota a .1 al superarlo
 
 function getLogFile() {
   if (process.env.LOG_FILE) return path.resolve(process.cwd(), process.env.LOG_FILE);
@@ -22,7 +23,12 @@ function write(level, ...args) {
   const color = level === 'error' ? '\x1b[31m' : level === 'warn' ? '\x1b[33m' : '\x1b[36m';
   console.log(color + line + '\x1b[0m');
   const logFile = getLogFile();
-  if (logFile) try { fs.appendFileSync(logFile, line + '\n'); } catch {}
+  if (logFile) {
+    try {
+      try { if (fs.statSync(logFile).size > MAX_LOG_SIZE) fs.renameSync(logFile, logFile + '.1'); } catch {}
+      fs.appendFileSync(logFile, line + '\n');
+    } catch {}
+  }
   emitter.emit('log', { level, ts, msg, line });
 }
 

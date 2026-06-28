@@ -26,20 +26,25 @@ const excludedVendors = () =>
     .split(',').map(Number).filter(n => !isNaN(n) && n > 0);
 
 function buildConfig() {
-  return {
-    server:   process.env.DB_SERVER   || 'localhost',
-    database: process.env.DB_NAME     || 'Farmatic',
-    user:     process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    port:     parseInt(process.env.DB_PORT, 10) || 1433,
+  const instance    = process.env.DB_INSTANCE     || '';
+  const windowsAuth = process.env.DB_WINDOWS_AUTH === 'true';
+  const cfg = {
+    server:   process.env.DB_SERVER || 'localhost',
+    database: process.env.DB_NAME   || 'Farmatic',
     options: {
       encrypt:                process.env.DB_ENCRYPT    === 'true',
       trustServerCertificate: process.env.DB_TRUST_CERT !== 'false',
-      instanceName:           process.env.DB_INSTANCE   || undefined,
+      instanceName:           instance || undefined,
+      trustedConnection:      windowsAuth,
     },
-    connectionTimeout: 15000,
+    connectionTimeout: 30000,   // era 15 000 — muy ajustado para SQL Server Express en arranque en frío
     requestTimeout:    120000,
   };
+  // Con named instance el driver resuelve el puerto via SQL Browser; no pasar port explícito
+  if (!instance) cfg.port = parseInt(process.env.DB_PORT, 10) || 1433;
+  // Windows Auth no usa usuario/contraseña
+  if (!windowsAuth) { cfg.user = process.env.DB_USER; cfg.password = process.env.DB_PASSWORD; }
+  return cfg;
 }
 
 let pool = null;
@@ -270,6 +275,9 @@ async function fetchVentasMensuales(anio) {
   const fac = await detectarFiltroFacturada(p);
   if (!fac.col) log.warn('No se detectó columna Facturada; se leen todas las ventas');
 
+  const excl      = excludedVendors();
+  const exclClause = excl.length ? `AND v.XVend_IdVendedor NOT IN (${excl.join(',')})` : '';
+
   const result = await p.request()
     .input('anio', sql.Int, anio)
     .query(`
@@ -286,7 +294,7 @@ async function fetchVentasMensuales(anio) {
         AND ${fac.filtro}
         AND lv.Cantidad > 0
         AND lv.Codigo IS NOT NULL AND lv.Codigo != ''
-        AND v.XVend_IdVendedor NOT IN (${excludedVendors().join(',')})
+        ${exclClause}
       GROUP BY LTRIM(RTRIM(lv.Codigo)), v.Ejercicio, v.Mes, v.XVend_IdVendedor
     `).catch(err => { log.warn('fetchVentasMensuales falló:', err.message); return { recordset: [] }; });
 
@@ -562,7 +570,9 @@ async function fetchFavoritosActuales() {
 }
 
 async function fetchTicketMedio(anio) {
-  const p = await getPool();
+  const p         = await getPool();
+  const excl      = excludedVendors();
+  const exclClause = excl.length ? `AND v.XVend_IdVendedor NOT IN (${excl.join(',')})` : '';
   const result = await p.request().input('anio', anio).query(`
     SELECT
       v.XVend_IdVendedor                             AS vendedor_id,
@@ -576,7 +586,7 @@ async function fetchTicketMedio(anio) {
     INNER JOIN Venta v ON v.IdVenta = lv.IdVenta
     WHERE v.TipoVenta = 'C'
       AND YEAR(v.FechaHora) = @anio
-      AND v.XVend_IdVendedor NOT IN (${excludedVendors().join(',')})
+      ${exclClause}
     GROUP BY v.XVend_IdVendedor, MONTH(v.FechaHora), YEAR(v.FechaHora)
   `).catch(err => { log.warn('fetchTicketMedio falló:', err.message); return { recordset: [] }; });
 

@@ -2,7 +2,7 @@ const log = require('./logger');
 
 const API_BASE_URL = () => (process.env.API_BASE_URL || '').replace(/\/$/, '');
 
-async function request(path, { method = 'GET', body } = {}) {
+async function request(path, { method = 'GET', body } = {}, _retries = 2) {
   const base = API_BASE_URL();
   if (!base) throw new Error('API_BASE_URL no configurada');
   const headers = { 'Content-Type': 'application/json' };
@@ -20,6 +20,13 @@ async function request(path, { method = 'GET', body } = {}) {
       throw new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`);
     }
     return res.json();
+  } catch (err) {
+    const isTransient = err.name === 'AbortError' || /HTTP 5\d\d/.test(err.message);
+    if (_retries > 0 && isTransient) {
+      await new Promise(r => setTimeout(r, 1500 * (3 - _retries)));
+      return request(path, { method, body }, _retries - 1);
+    }
+    throw err;
   } finally {
     clearTimeout(timer);
   }

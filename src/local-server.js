@@ -13,7 +13,7 @@ function getDbPath() {
   return path.join(__dirname, 'cronicos.db');
 }
 
-function startLocalServer(log) {
+function startLocalServer(log, onListening) {
   const PORT = parseInt(process.env.LOCAL_PORT, 10) || 3001;
   const app  = express();
   app.use(express.json());
@@ -215,14 +215,23 @@ function startLocalServer(log) {
     }
   });
 
-  const server = app.listen(PORT, '127.0.0.1', () => {
-    if (log) log.info(`✓ Servidor local crónicos en localhost:${PORT}`);
-  });
-
-  server.on('error', (err) => {
-    if (log) log.warn(`Servidor local no pudo arrancar en puerto ${PORT}: ${err.message}`);
-  });
-
+  function tryBind(port) {
+    const server = app.listen(port, '127.0.0.1');
+    server.once('listening', () => {
+      if (log) log.info(`✓ Servidor local crónicos en localhost:${port}`);
+      if (onListening) onListening(port);
+    });
+    server.once('error', (err) => {
+      server.close();
+      if (err.code === 'EADDRINUSE' && port < PORT + 4) {
+        if (log) log.warn(`Puerto ${port} ocupado, probando ${port + 1}…`);
+        tryBind(port + 1);
+      } else {
+        if (log) log.warn(`Servidor local no pudo arrancar: ${err.message}`);
+      }
+    });
+  }
+  tryBind(PORT);
   return app;
 }
 
