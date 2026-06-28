@@ -18,11 +18,23 @@ function startLocalServer(log) {
   const app  = express();
   app.use(express.json());
 
+  // Orígenes permitidos: localhost + URL del túnel Cloudflare (configurable via TUNNEL_ORIGIN)
+  const allowedOrigins = new Set([
+    'http://localhost',
+    'http://127.0.0.1',
+    `http://localhost:${PORT}`,
+    `http://127.0.0.1:${PORT}`,
+    ...(process.env.TUNNEL_ORIGIN ? [process.env.TUNNEL_ORIGIN] : []),
+  ]);
+
   app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
+    const origin = req.headers.origin || '';
+    const allowed = !origin || allowedOrigins.has(origin) ||
+      origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1');
+    res.header('Access-Control-Allow-Origin', allowed ? origin : 'null');
     res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    if (req.method === 'OPTIONS') return res.sendStatus(200);
+    if (req.method === 'OPTIONS') return res.sendStatus(allowed ? 200 : 403);
     next();
   });
 

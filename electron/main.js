@@ -7,7 +7,7 @@ const Store = require('electron-store');
 
 const store = new Store({ name: 'nextfarma-sync' });
 
-const API_BASE = 'https://nextfarma-api-production.up.railway.app';
+const API_BASE = process.env.OVERRIDE_API_BASE || 'https://nextfarma-api-production.up.railway.app';
 
 let mainWindow  = null;
 let tray        = null;

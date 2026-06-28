@@ -73,13 +73,23 @@ async function runSync() {
   const anioActual   = new Date().getFullYear();
   const anioAnterior = anioActual - 1;
   let todasVentas    = [];
+  let sinFiltroFacturada = false;
+  const origWarn = log.warn.bind(log);
+  const warnProxy = (msg, ...args) => {
+    if (typeof msg === 'string' && msg.includes('no se detectó columna Facturada')) sinFiltroFacturada = true;
+    origWarn(msg, ...args);
+  };
+  log.warn = warnProxy;
   try {
     const vActual   = await farmatic.fetchVentasMensuales(anioActual);
     const vAnterior = await farmatic.fetchVentasMensuales(anioAnterior);
     todasVentas = [...vActual, ...vAnterior];
     ok(`Ventas: ${vActual.length} (${anioActual}) + ${vAnterior.length} (${anioAnterior})`);
+    if (sinFiltroFacturada) warn('Columna Facturada no detectada en Farmatic — ventas incluyen borradores/anulados');
   } catch (e) {
     warn('Ventas no disponibles: ' + e.message + ' — Los análisis de ventas no se actualizarán.');
+  } finally {
+    log.warn = origWarn;
   }
 
   let productos = [];
@@ -306,9 +316,8 @@ async function runSync() {
         log.info('Cambios pendientes: ' + cambios.length + ' a procesar');
         const r = await farmatic.procesarCambiosPendientes(cambios);
         log.info(`Cambios procesados: ${r.procesados} OK, ${r.errores} errores`);
-        if (r.procesados > 0) {
-          const ids = cambios.slice(0, r.procesados).map(c => c.id);
-          await api.marcarCambiosProcesados(tenantId, ids);
+        if (r.ids_procesados && r.ids_procesados.length > 0) {
+          await api.marcarCambiosProcesados(tenantId, r.ids_procesados);
         }
       } else {
         log.info('Sin cambios pendientes.');

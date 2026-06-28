@@ -255,6 +255,7 @@ async function detectarFiltroFacturada(p) {
       }
     }
   }
+  log.warn('⚠ AVISO: no se detectó columna Facturada en tabla Venta — se sincronizarán TODAS las ventas (incluidos borradores/anulados). Revisa la configuración de Farmatic.');
   return { col: null, filtro: '1 = 1' };
 }
 
@@ -605,9 +606,10 @@ function getCategoriaLista() {
 }
 
 async function procesarCambiosPendientes(cambios) {
-  if (!cambios || cambios.length === 0) return { procesados: 0, errores: 0 };
+  if (!cambios || cambios.length === 0) return { procesados: 0, errores: 0, ids_procesados: [] };
   const p = await getPool();
   let procesados = 0, errores = 0;
+  const ids_procesados = [];
 
   for (const cambio of cambios) {
     try {
@@ -649,13 +651,14 @@ async function procesarCambiosPendientes(cambios) {
       }
 
       procesados++;
+      ids_procesados.push(cambio.id);
     } catch (err) {
       log.error('Error procesando cambio CH ' + cambio.ch + ':', err.message);
       errores++;
     }
   }
 
-  return { procesados, errores };
+  return { procesados, errores, ids_procesados };
 }
 
 // ── Métodos del asistente de configuración ────────────────────────────────
