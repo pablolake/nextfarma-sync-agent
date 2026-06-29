@@ -145,7 +145,7 @@ No es bloqueante. Aplicar en cualquier momento con los demás fixes menores.
 | # | Severidad | Estado | Bloqueante para distribuir |
 |---|-----------|--------|---------------------------|
 | 02 | Crítico | Pendiente decisión (qué certificado) | Sí — SmartScreen |
-| 03 | Crítico | Pendiente crear workflow CI | Sí — crash en Windows |
-| 04 | Alto | Pendiente decidir ruta carpeta | No bloqueante, feature silenciosa |
-| 07 | Medio | Pendiente decidir si se usa o se elimina | No bloqueante |
-| 12 | Bajo | Fix listo, aplicar cuando toque | No bloqueante |
+| 03 | Crítico | Workflow CI ya existe en `.github/workflows/build.yml` | Resuelto |
+| 04 | Alto | ✅ Resuelto en v1.0.7 — usa USERDATA_PATH | No bloqueante |
+| 07 | Medio | ✅ Resuelto en v1.0.7 — xlsx añadido a package.json | No bloqueante |
+| 12 | Bajo | ✅ Resuelto en v1.0.7 — lv.IdVenta corregido | No bloqueante |

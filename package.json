@@ -1,6 +1,6 @@
 {
   "name": "nextfarma-sync",
-  "version": "1.0.1",
+  "version": "1.0.7",
   "description": "NextFarma Sync — agente local que sincroniza Farmatic (SQL Server) con la plataforma NextFarma.",
   "private": true,
   "main": "electron/main.js",
@@ -17,7 +17,8 @@
     "dotenv": "^16.4.5",
     "electron-store": "^5.2.0",
     "express": "^4.19.2",
-    "mssql": "^11.0.1"
+    "mssql": "^11.0.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "electron": "^30.0.0",

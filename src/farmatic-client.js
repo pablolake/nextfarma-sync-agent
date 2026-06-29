@@ -61,7 +61,7 @@ async function closePool() {
 }
 
 const CONSEJO_DB    = () => process.env.DB_CONSEJO || 'Consejo';
-const DESCUENTOS_DIR = () => process.env.DESCUENTOS_DIR || path.join(process.cwd(), 'descuentos');
+const DESCUENTOS_DIR = () => process.env.DESCUENTOS_DIR || path.join(process.env.USERDATA_PATH || process.cwd(), 'descuentos');
 
 function cargarDescuentosExcel() {
   const dtos = new Map();
@@ -816,7 +816,7 @@ const DIAGNOSTIC_QUERIES = {
         COUNT(DISTINCT v.IdVenta)     AS n_tickets,
         SUM(lv.Cantidad)              AS n_unidades
       FROM Venta v
-      JOIN LineaVenta lv ON lv.XVenta_IdVenta = v.IdVenta
+      JOIN LineaVenta lv ON lv.IdVenta = v.IdVenta
       LEFT JOIN Vendedor ve ON ve.IdVendedor = v.XVend_IdVendedor
       WHERE v.FechaHora >= DATEADD(day, -30, GETDATE())
       GROUP BY v.XVend_IdVendedor, ve.Nombre
