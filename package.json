@@ -13,16 +13,17 @@
     "build:mac": "electron-builder --mac"
   },
   "dependencies": {
-    "better-sqlite3": "^9.6.0",
+    "better-sqlite3": "^12.11.1",
     "dotenv": "^16.4.5",
-    "electron-store": "^5.2.0",
+    "electron-store": "^7.0.3",
     "express": "^4.19.2",
     "mssql": "^11.0.1",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
-    "electron": "^30.0.0",
-    "electron-builder": "^24.13.3"
+    "electron": "^42.5.2",
+    "electron-builder": "^24.13.3",
+    "electron-vite": "^5.0.0"
   },
   "build": {
     "appId": "es.nextfarma.sync",

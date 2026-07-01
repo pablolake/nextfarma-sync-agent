@@ -1,21 +1,25 @@
-'use strict';
+import { createRequire } from 'module';
+import { fileURLToPath } from 'url';
+import path from 'path';
+
+const require = createRequire(import.meta.url);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, shell } = require('electron');
-const path  = require('path');
 const Store = require('electron-store');
 
 const API_BASE = process.env.OVERRIDE_API_BASE || 'https://api-production-3d66.up.railway.app';
 
-let store              = null;
-let mainWindow         = null;
-let tray               = null;
-let syncTimer          = null;
-let isSyncing          = false;
-let lastSyncAt         = null;
-let tenantName         = null;
-let syncEnabled        = false;
+let store           = null;  // initialized in app.whenReady()
+let mainWindow      = null;
+let tray            = null;
+let syncTimer       = null;
+let isSyncing       = false;
+let lastSyncAt      = null;
+let tenantName      = null;
+let syncEnabled     = false;
 let localServerStarted = false;
-let lastSyncResults    = null;
+let lastSyncResults = null;  // { ok: [], warn: [], error: [], elapsed }
 
 // ── Single instance lock ─────────────────────────────────────────────────────
 const gotLock = app.requestSingleInstanceLock();
@@ -42,12 +46,12 @@ function applyConfig(cfg) {
   process.env.USERDATA_PATH = app.getPath('userData');
 
   const w = cfg.wizard || {};
-  if (w.excludedVendors?.length)     process.env.EXCLUDED_VENDORS       = w.excludedVendors.join(',');
-  if (w.labKern)                     process.env.LAB_KERN               = w.labKern;
-  if (w.labNormon)                   process.env.LAB_NORMON             = w.labNormon;
-  if (w.labTeva)                     process.env.LAB_TEVA               = w.labTeva;
-  if (w.labCinfa)                    process.env.LAB_CINFA              = w.labCinfa;
-  if (w.labSecundarios)              process.env.LAB_SECUNDARIOS        = w.labSecundarios;
+  if (w.excludedVendors?.length)     process.env.EXCLUDED_VENDORS  = w.excludedVendors.join(',');
+  if (w.labKern)                     process.env.LAB_KERN          = w.labKern;
+  if (w.labNormon)                   process.env.LAB_NORMON        = w.labNormon;
+  if (w.labTeva)                     process.env.LAB_TEVA          = w.labTeva;
+  if (w.labCinfa)                    process.env.LAB_CINFA         = w.labCinfa;
+  if (w.labSecundarios)              process.env.LAB_SECUNDARIOS   = w.labSecundarios;
   if (w.listIncentivadosStar)        process.env.LIST_INCENTIVADOS_STAR = String(w.listIncentivadosStar);
   if (w.listIncentivados)            process.env.LIST_INCENTIVADOS      = String(w.listIncentivados);
   if (w.listMaxRotA)                 process.env.LIST_MAX_ROT_A         = String(w.listMaxRotA);
@@ -155,9 +159,9 @@ ipcMain.handle('test-api-key', async (_, apiKey) => {
 ipcMain.handle('test-db', async (_, dbCfg) => {
   const farmatic = require('../src/farmatic-client');
   const prevEnv  = {
-    DB_SERVER: process.env.DB_SERVER, DB_NAME:         process.env.DB_NAME,
-    DB_USER:   process.env.DB_USER,   DB_PASSWORD:     process.env.DB_PASSWORD,
-    DB_PORT:   process.env.DB_PORT,   DB_INSTANCE:     process.env.DB_INSTANCE,
+    DB_SERVER: process.env.DB_SERVER, DB_NAME:        process.env.DB_NAME,
+    DB_USER:   process.env.DB_USER,   DB_PASSWORD:    process.env.DB_PASSWORD,
+    DB_PORT:   process.env.DB_PORT,   DB_INSTANCE:    process.env.DB_INSTANCE,
     DB_CONSEJO: process.env.DB_CONSEJO, DB_WINDOWS_AUTH: process.env.DB_WINDOWS_AUTH,
   };
   process.env.DB_SERVER       = dbCfg.server   || 'localhost';
@@ -210,9 +214,9 @@ ipcMain.handle('get-cronicos-stats', () => {
   try {
     const Database = require('better-sqlite3');
     const db = new Database(dbPath, { readonly: true });
-    const total       = db.prepare('SELECT COUNT(*) AS n FROM cronicos').get()?.n || 0;
+    const total      = db.prepare('SELECT COUNT(*) AS n FROM cronicos').get()?.n || 0;
     const consentidos = db.prepare('SELECT COUNT(*) AS n FROM cronicos WHERE consentimiento=1').get()?.n || 0;
-    const pendientes  = db.prepare(`
+    const pendientes = db.prepare(`
       SELECT COUNT(DISTINCT id_farmatic) AS n FROM cronicos_medicacion
       WHERE aviso_enviado=0
         AND julianday(fecha_estimada_salida) - julianday('now') <= 7
@@ -299,7 +303,7 @@ function createWindow() {
     minWidth:  700,
     minHeight: 520,
     webPreferences: {
-      preload:          path.join(__dirname, 'preload.js'),
+      preload:          path.join(__dirname, 'preload.mjs'),
       contextIsolation: true,
       nodeIntegration:  false,
       sandbox:          false,
