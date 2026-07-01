@@ -78,7 +78,9 @@ async function runSyncOnce() {
   tray?.setToolTip('NextFarma Sync · sincronizando…');
   try {
     const { runSync } = require('../src/sync');
-    lastSyncResults = await runSync();
+    lastSyncResults = await runSync({
+      onStep: (stepData) => send('sync-step', stepData),
+    });
     lastSyncAt = new Date().toISOString();
     send('sync-status', { running: false, lastSyncAt });
     tray?.setToolTip('NextFarma Sync · activo');
@@ -113,12 +115,18 @@ function stopAutoSync() {
 
 function startLocalServerIfNeeded() {
   if (localServerStarted) return;
+  const log = require('../src/logger');
   try {
     const { startLocalServer } = require('../src/local-server');
-    const log = require('../src/logger');
-    startLocalServer(log, () => { localServerStarted = true; });
+    startLocalServer(log, (port) => {
+      localServerStarted = true;
+      if (port && port !== 3001) {
+        log.warn(`Servidor local iniciado en puerto ${port} (3001 estaba ocupado)`);
+        process.env.LOCAL_SERVER_PORT = String(port);
+      }
+    });
   } catch (err) {
-    console.error('Error iniciando servidor local:', err.message);
+    log.error('Error iniciando servidor local:', err.message);
   }
 }
 
@@ -223,6 +231,12 @@ ipcMain.handle('get-cronicos-stats', () => {
 
 ipcMain.handle('open-logs-folder', () => {
   shell.openPath(app.getPath('userData'));
+});
+
+ipcMain.handle('set-log-level', (_, level) => {
+  const valid = ['debug', 'info', 'warn', 'error'];
+  if (valid.includes(level)) process.env.LOG_LEVEL = level;
+  return { ok: true, level: process.env.LOG_LEVEL };
 });
 
 // ── Wizard IPC ────────────────────────────────────────────────────────────────
@@ -367,7 +381,7 @@ app.whenReady().then(() => {
     const log = require('../src/logger');
     log.emitter.on('log', (entry) => send('log', entry));
     startLocalServerIfNeeded();
-    if (cfg.autostart !== false) startAutoSync();
+    if (cfg.autosync !== false) startAutoSync();
   }
 
   createWindow();

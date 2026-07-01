@@ -3,6 +3,7 @@ let syncEnabled  = false;
 let nextSyncAt   = null;
 let countdownTimer = null;
 let logFilter    = 'all';
+let syncSteps    = []; // { key, label, status } — real-time sync progress
 
 // Wizard state
 const wz = {
@@ -25,12 +26,8 @@ window.addEventListener('DOMContentLoaded', async () => {
   window.sync.onLog(addLogEntry);
   window.sync.onSyncStatus(onSyncStatus);
   window.sync.onSyncEnabled(onSyncEnabled);
-  window.sync.onSetupShow = () => switchTab('config');
-});
-
-// Called by main.js when API key is missing
-window.addEventListener('message', (e) => {
-  if (e.data === 'show-setup') switchTab('config');
+  window.sync.onShowSetup(() => switchTab('config'));
+  window.sync.onSyncStep(onSyncStep);
 });
 
 /* ── Config ─────────────────────────────────────────────────────────── */
@@ -162,11 +159,40 @@ async function refreshStatus() {
   updateSyncUI(s);
 }
 
+/* ── Sync step progress ──────────────────────────────────────────────── */
+function onSyncStep(data) {
+  const existing = syncSteps.findIndex(s => s.key === data.key);
+  if (existing >= 0) {
+    syncSteps[existing] = data;
+  } else {
+    syncSteps.push(data);
+  }
+  renderSyncProgress();
+}
+
+function renderSyncProgress() {
+  const panel = document.getElementById('sync-progress-panel');
+  if (!panel) return;
+  if (!syncSteps.length) { panel.style.display = 'none'; return; }
+
+  const list = document.getElementById('sync-progress-list');
+  const iconMap = { running: '⏳', ok: '✓', warn: '⚠', error: '✗' };
+  list.innerHTML = syncSteps.map(s =>
+    `<div class="step-item step-${s.status}">
+      <span class="step-icon">${iconMap[s.status] || '·'}</span>
+      <span class="step-label">${escapeHtml(s.label)}</span>
+    </div>`
+  ).join('');
+  panel.style.display = '';
+}
+
 function onSyncStatus(data) {
   const dot   = document.getElementById('status-dot');
   const label = document.getElementById('status-label');
 
   if (data.running) {
+    syncSteps = [];
+    renderSyncProgress();
     dot.className = 'status-dot syncing';
     label.textContent = 'Sincronizando…';
   } else if (data.error) {
@@ -344,6 +370,10 @@ function clearLogs() {
   document.getElementById('log-container').innerHTML = '';
 }
 
+async function setDebugMode(on) {
+  await window.sync.setLogLevel(on ? 'debug' : 'info');
+}
+
 function openLogsFolder() {
   window.sync.openLogsFolder();
 }
@@ -438,6 +468,10 @@ async function wizardNext(step) {
     el.classList.remove('active', 'done');
     if (i < step) el.classList.add('done');
     if (i === step) el.classList.add('active');
+  });
+  // Update connecting lines between steps
+  document.querySelectorAll('.wstep-line').forEach((el, i) => {
+    el.classList.toggle('done', i < step);
   });
   document.getElementById('wp-' + step).classList.add('active');
   wz.step = step;

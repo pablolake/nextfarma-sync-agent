@@ -657,3 +657,44 @@ header {
 /* Crónicos log entries */
 .log-cronicos { background: rgba(34, 197, 94, 0.04); }
 .log-tag-cronicos { flex-shrink: 0; margin-right: 2px; }
+
+/* ── Wizard step line done state ──────────────────────────────────── */
+.wstep-line.done { background: var(--success); }
+
+/* ── Real-time sync progress panel ───────────────────────────────── */
+.sync-progress-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 0 10px;
+}
+
+.step-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 5px;
+}
+
+.step-icon {
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+  font-size: 11px;
+}
+
+.step-label { flex: 1; word-break: break-word; }
+
+.step-item.step-running { background: #0d1a2e; color: #7dd3fc; }
+.step-item.step-ok      { background: #052e16; color: #86efac; }
+.step-item.step-warn    { background: #1c1003; color: #fde68a; }
+.step-item.step-error   { background: #2d0a0a; color: #fca5a5; }
+
+@keyframes pulse-spin {
+  0%   { opacity: 1; }
+  50%  { opacity: 0.4; }
+  100% { opacity: 1; }
+}
+.step-item.step-running .step-icon { animation: pulse-spin 1.2s ease-in-out infinite; }

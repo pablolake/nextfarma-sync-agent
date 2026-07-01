@@ -50,7 +50,10 @@ function calcularSCporLabMes(ventas, productos) {
   return sc;
 }
 
-async function runSync() {
+async function runSync(opts = {}) {
+  const { onStep } = opts;
+  const step = (key, label, status) => onStep?.({ key, label, status });
+
   const t0 = Date.now();
   log.info('═══════════════════════════════════════════');
   log.info('Iniciando sincronización');
@@ -61,11 +64,15 @@ async function runSync() {
   const warn = (msg) => { resultados.warn.push(msg);  log.warn('⚠ ' + msg); };
   const err  = (msg) => { resultados.error.push(msg); log.error('✗ ' + msg); };
 
+  // ── PASO 1: Verificar API ────────────────────────────────────────────
+  step('api', 'Verificando conexión con NextFarma…', 'running');
   try {
     const s = await api.status();
     ok(`API conectada · Farmacia: ${s.tenant?.nombre || '—'}`);
+    step('api', `API OK · ${s.tenant?.nombre || '—'}`, 'ok');
   } catch (e) {
     err('API inalcanzable: ' + e.message);
+    step('api', 'API inalcanzable — verifica la conexión a internet', 'error');
     err('Sync cancelado: sin conexión con NextFarma.');
     return { ...resultados, elapsed: '0s' };
   }
@@ -79,6 +86,9 @@ async function runSync() {
     if (typeof msg === 'string' && msg.includes('no se detectó columna Facturada')) sinFiltroFacturada = true;
     origWarn(msg, ...args);
   };
+
+  // ── PASO 2: Leer ventas de Farmatic ─────────────────────────────────
+  step('ventas', 'Leyendo ventas de Farmatic…', 'running');
   log.warn = warnProxy;
   try {
     const vActual   = await farmatic.fetchVentasMensuales(anioActual);
@@ -86,33 +96,41 @@ async function runSync() {
     todasVentas = [...vActual, ...vAnterior];
     ok(`Ventas: ${vActual.length} (${anioActual}) + ${vAnterior.length} (${anioAnterior})`);
     if (sinFiltroFacturada) warn('Columna Facturada no detectada en Farmatic — ventas incluyen borradores/anulados');
+    step('ventas', `Ventas: ${vActual.length} este año · ${vAnterior.length} año anterior`, 'ok');
   } catch (e) {
     warn('Ventas no disponibles: ' + e.message + ' — Los análisis de ventas no se actualizarán.');
+    step('ventas', 'Ventas no disponibles — análisis de ventas omitido. Verifica la tabla Venta/LineaVenta en Farmatic.', 'warn');
   } finally {
     log.warn = origWarn;
   }
 
+  // ── PASO 3: Leer catálogo de Farmatic ───────────────────────────────
   let productos = [];
+  step('catalogo', 'Leyendo catálogo de productos…', 'running');
   try {
     productos = await farmatic.fetchProductos();
     ok(`${productos.length} productos leídos`);
-    // Inform about products with missing key fields
     const sinPvl = productos.filter(p => !p.pvl).length;
     const sinDto = productos.filter(p => !p.dto).length;
     if (sinPvl > 0) warn(`${sinPvl} productos sin PVL — precio de compra se estimará por ratio`);
     if (sinDto > 0 && sinDto < productos.length * 0.5)
       warn(`${sinDto} productos sin descuento Cofares — SC no calculable para esos CNs`);
+    step('catalogo', `Catálogo: ${productos.length} productos leídos`, 'ok');
   } catch (e) {
     warn('Catálogo de productos no disponible: ' + e.message + ' — El resto del sync continúa.');
+    step('catalogo', 'Catálogo no disponible — verifica la tabla Articu en Farmatic', 'warn');
   }
 
-  // Load recepciones early so we can use bonificacion as dto fallback
+  // ── PASO 4: Leer recepciones (precios reales de albarán) ────────────
   let recepciones = [];
+  step('recepciones', 'Leyendo recepciones de albarán…', 'running');
   try {
     recepciones = await farmatic.fetchRecepcionesRecientes(12);
     log.info(`✓ ${recepciones.length} recepciones leídas (último año)`);
-  } catch (err) {
-    log.warn('Recepciones no disponibles:', err.message);
+    step('recepciones', `Recepciones: ${recepciones.length} albaranes leídos`, 'ok');
+  } catch (e) {
+    log.warn('Recepciones no disponibles:', e.message);
+    step('recepciones', 'Recepciones no disponibles — precios de albarán omitidos', 'warn');
   }
 
   // Priority 1: 4DB (Cofares Conecta 4D) — most accurate, normalized to decimal in farmatic-client
@@ -133,8 +151,8 @@ async function runSync() {
       }
       log.info(`✓ 4DB: ${datos4DB.length} CNs, ${n4db} con dto`);
     }
-  } catch (err) {
-    log.warn('4DB omitido:', err.message);
+  } catch (e) {
+    log.warn('4DB omitido:', e.message);
   }
 
   // Priority 2: LineaRecep.bonificacion — last real albaran discount, for products still without dto
@@ -145,7 +163,6 @@ async function runSync() {
       if (prod.dto > 0) continue;
       const r = mapRecep.get(prod.codigo_nacional);
       if (!r || r.bonificacion == null || r.bonificacion <= 0) continue;
-      // bonificacion stored as 0-100 (%), normalize to decimal
       prod.dto = +(r.bonificacion / 100).toFixed(4);
       nRecep++;
     }
@@ -178,27 +195,37 @@ async function runSync() {
     log.info(`✓ Filtro SOLO_VENDIDOS: ${productos.length}/${antes} productos con ventas`);
   }
 
+  // ── PASO 5: Enviar catálogo a NextFarma ─────────────────────────────
   if (productos.length > 0) {
+    step('env-cat', 'Enviando catálogo a NextFarma…', 'running');
     try {
       const r = await api.enviarProductos(productos);
       ok(`Productos: ${r.inserted} nuevos, ${r.updated} actualizados${r.errors > 0 ? `, ${r.errors} errores` : ''}`);
       if (r.errors > 0) warn(`${r.errors} productos rechazados por la API — puede haber CNs con datos incompletos`);
+      step('env-cat', `Catálogo: ${r.inserted} nuevos · ${r.updated} actualizados`, r.errors > 0 ? 'warn' : 'ok');
     } catch (e) {
       err('Error enviando productos: ' + e.message);
+      step('env-cat', 'Error enviando catálogo: ' + e.message, 'error');
     }
   } else {
     warn('Sin productos que enviar — el catálogo no se actualizará');
+    step('env-cat', 'Sin catálogo que enviar', 'warn');
   }
 
+  // ── PASO 6: Enviar ventas a NextFarma ───────────────────────────────
   if (todasVentas.length > 0) {
+    step('env-ven', 'Enviando ventas a NextFarma…', 'running');
     try {
       const r = await api.enviarVentas(todasVentas);
       ok(`Ventas: ${r.upserts} actualizadas${r.errors > 0 ? `, ${r.errors} errores` : ''}`);
+      step('env-ven', `Ventas: ${r.upserts} registros enviados`, r.errors > 0 ? 'warn' : 'ok');
     } catch (e) {
       err('Error enviando ventas: ' + e.message);
+      step('env-ven', 'Error enviando ventas: ' + e.message, 'error');
     }
   } else {
     warn('Sin ventas que enviar — tablas Venta/LineaVenta no accesibles o vacías');
+    step('env-ven', 'Sin ventas que enviar', 'warn');
   }
 
   try {
@@ -207,21 +234,23 @@ async function runSync() {
       const r = await api.enviarVentas(vAnuales);
       log.info(`✓ Ventas anuales ${anioAnterior}: ${r.upserts} actualizadas`);
     }
-  } catch (err) {
-    log.warn('Ventas anuales omitidas:', err.message);
+  } catch (e) {
+    log.warn('Ventas anuales omitidas:', e.message);
   }
 
   if (recepciones.length > 0) {
     try {
       const r = await api.enviarRecepciones(recepciones);
       log.info(`✓ Recepciones: ${r.upserts} productos con precio real de albarán`);
-    } catch (err) {
-      log.warn('Error enviando recepciones:', err.message);
+    } catch (e) {
+      log.warn('Error enviando recepciones:', e.message);
     }
   } else {
     log.info('Recepciones: sin datos o tablas no disponibles.');
   }
 
+  // ── PASO 7: Favoritos, cierre, ticket medio, vendedores ─────────────
+  step('misc', 'Favoritos, cierre mensual, ticket medio…', 'running');
   try {
     const favoritos = await farmatic.fetchFavoritosListas();
     if (favoritos.length > 0) {
@@ -230,8 +259,8 @@ async function runSync() {
     } else {
       log.warn('Favoritos: no se encontraron ítems en las listas de Farmatic.');
     }
-  } catch (err) {
-    log.warn('Favoritos omitidos:', err.message);
+  } catch (e) {
+    log.warn('Favoritos omitidos:', e.message);
   }
 
   try {
@@ -242,8 +271,8 @@ async function runSync() {
       const r = await api.request('/api/sync/favoritos-historico', { method: 'POST', body: { cambios } });
       log.info(`✓ Favoritos histórico: ${r.upserts} registros actualizados`);
     }
-  } catch (err) {
-    log.warn('Favoritos histórico omitido:', err.message);
+  } catch (e) {
+    log.warn('Favoritos histórico omitido:', e.message);
   }
 
   try {
@@ -260,8 +289,8 @@ async function runSync() {
     } else {
       log.info('Cierre mensual: sin meses nuevos que cerrar');
     }
-  } catch (err) {
-    log.warn('Cierre mensual omitido:', err.message);
+  } catch (e) {
+    log.warn('Cierre mensual omitido:', e.message);
   }
 
   try {
@@ -272,8 +301,8 @@ async function runSync() {
       const r = await api.request('/api/sync/ticket-medio', { method: 'POST', body: { datos: allTicket } });
       log.info(`✓ Ticket medio: ${r.upserts} registros`);
     }
-  } catch (err) {
-    log.warn('Ticket medio omitido:', err.message);
+  } catch (e) {
+    log.warn('Ticket medio omitido:', e.message);
   }
 
   try {
@@ -282,42 +311,47 @@ async function runSync() {
       const r = await api.request('/api/sync/vendedores', { method: 'POST', body: { vendedores } });
       log.info(`✓ Vendedores: ${r.upserts} registros`);
     }
-  } catch (err) {
-    log.warn('Sync vendedores omitido:', err.message);
+  } catch (e) {
+    log.warn('Sync vendedores omitido:', e.message);
   }
+
+  step('misc', 'Favoritos y datos auxiliares enviados', 'ok');
+
+  // ── PASO 8: Crónicos, encargos, cambios pendientes ─────────────────
+  step('cronicos', 'Sincronizando encargos y crónicos RGPD…', 'running');
 
   await syncEncargos();
 
   try {
     const pool = await farmatic.getPool();
     await syncCronicos(pool, api, log);
-  } catch (err) {
-    log.warn('syncCronicos omitido:', err.message);
+  } catch (e) {
+    log.warn('syncCronicos omitido:', e.message);
   }
 
   try {
     const pool = await farmatic.getPool();
     await syncNuevosCronicos(pool, api, log);
-  } catch (err) {
-    log.warn('syncNuevosCronicos omitido:', err.message);
+  } catch (e) {
+    log.warn('syncNuevosCronicos omitido:', e.message);
   }
 
   try {
     await syncCronicosAlertas(api, log);
-  } catch (err) {
-    log.warn('syncCronicosAlertas omitido:', err.message);
+  } catch (e) {
+    log.warn('syncCronicosAlertas omitido:', e.message);
   }
 
   try {
     await syncCronicosClientes(api, log);
-  } catch (err) {
-    log.warn('syncCronicosClientes omitido:', err.message);
+  } catch (e) {
+    log.warn('syncCronicosClientes omitido:', e.message);
   }
 
   try {
     await syncEncargosVencidos(api, log);
-  } catch (err) {
-    log.warn('syncEncargosVencidos omitido:', err.message);
+  } catch (e) {
+    log.warn('syncEncargosVencidos omitido:', e.message);
   }
 
   try {
@@ -335,9 +369,11 @@ async function runSync() {
         log.info('Sin cambios pendientes.');
       }
     }
-  } catch (err) {
-    log.warn('Cambios pendientes omitidos:', err.message);
+  } catch (e) {
+    log.warn('Cambios pendientes omitidos:', e.message);
   }
+
+  step('cronicos', 'Crónicos y encargos sincronizados', 'ok');
 
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
   log.info('═══════════════════════════════════════════');
@@ -374,7 +410,7 @@ async function syncEncargos() {
       WHERE e.FechaRecepcion >= DATEADD(day, -7, GETDATE())
         AND e.Estado IS NOT NULL
       ORDER BY e.FechaRecepcion DESC
-    `).catch(err => { log.warn('syncEncargos falló:', err.message); return { recordset: [] }; });
+    `).catch(e => { log.warn('syncEncargos falló:', e.message); return { recordset: [] }; });
 
     if (!result.recordset.length) return;
 
@@ -394,8 +430,8 @@ async function syncEncargos() {
       body: { encargos }
     });
     log.info(`✓ Encargos: ${resp.tareas_creadas} tareas creadas`);
-  } catch (err) {
-    log.warn('syncEncargos error:', err.message);
+  } catch (e) {
+    log.warn('syncEncargos error:', e.message);
   }
 }
 
@@ -419,7 +455,7 @@ async function syncNuevosCronicos(farmaticPool, apiClient, log) {
       FROM ClienteRGPD r
       LEFT JOIN Cliente c ON CAST(c.IdCliente AS VARCHAR) = LTRIM(RTRIM(r.XClie_IdCliente))
       WHERE r.OpcRGPD = ${parseInt(process.env.RGPD_OPCION, 10) || 31}
-    `).catch(err => { log.warn('RGPD query error:', err.message); return { recordset: [] }; });
+    `).catch(e => { log.warn('RGPD query error:', e.message); return { recordset: [] }; });
 
     if (!result.recordset.length) return;
 
@@ -474,7 +510,6 @@ async function syncCronicosAlertas(apiClient, log) {
   }
 
   try {
-    // Pacientes con medicación que vence en -3..+7 días y consentimiento RGPD
     const alertas = db.prepare(`
       SELECT
         c.id_farmatic,
@@ -507,8 +542,8 @@ async function syncCronicosAlertas(apiClient, log) {
       body: { alertas }
     });
     log.info(`✓ Crónicos: ${r.avisos_actualizados} avisos · ${r.tareas_creadas} tareas nuevas`);
-  } catch (err) {
-    log.warn('syncCronicosAlertas omitido:', err.message);
+  } catch (e) {
+    log.warn('syncCronicosAlertas omitido:', e.message);
   } finally {
     db.close();
   }
@@ -518,8 +553,8 @@ async function syncEncargosVencidos(apiClient, log) {
   try {
     const r = await apiClient.request('/api/sync/encargos-vencidos', { method: 'POST', body: {} });
     if (r.actualizados > 0) log.info(`✓ Encargos vencidos: ${r.actualizados} con fase devolver generada`);
-  } catch (err) {
-    log.warn('syncEncargosVencidos error:', err.message);
+  } catch (e) {
+    log.warn('syncEncargosVencidos error:', e.message);
   }
 }
 

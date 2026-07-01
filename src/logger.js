@@ -6,8 +6,9 @@ const emitter = new EventEmitter();
 emitter.setMaxListeners(20);
 
 const LEVELS       = { debug: 0, info: 1, warn: 2, error: 3 };
-const LEVEL        = LEVELS[(process.env.LOG_LEVEL || 'info').toLowerCase()] ?? 1;
 const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5 MB — rota a .1 al superarlo
+
+function currentLevel() { return LEVELS[(process.env.LOG_LEVEL || 'info').toLowerCase()] ?? 1; }
 
 function getLogFile() {
   if (process.env.LOG_FILE) return path.resolve(process.cwd(), process.env.LOG_FILE);
@@ -16,7 +17,7 @@ function getLogFile() {
 }
 
 function write(level, ...args) {
-  if (LEVELS[level] < LEVEL) return;
+  if (LEVELS[level] < currentLevel()) return;
   const ts  = new Date().toISOString();
   const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
   const line = `[${ts}] [${level.toUpperCase()}] ${msg}`;

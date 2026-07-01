@@ -23,4 +23,7 @@ contextBridge.exposeInMainWorld('sync', {
   onLog:         (cb) => { ipcRenderer.on('log',          (_, d) => cb(d)); },
   onSyncStatus:  (cb) => { ipcRenderer.on('sync-status',  (_, d) => cb(d)); },
   onSyncEnabled: (cb) => { ipcRenderer.on('sync-enabled', (_, d) => cb(d)); },
+  onShowSetup:   (cb) => { ipcRenderer.on('show-setup',   (_, d) => cb(d)); },
+  onSyncStep:    (cb) => { ipcRenderer.on('sync-step',    (_, d) => cb(d)); },
+  setLogLevel:   (level) => ipcRenderer.invoke('set-log-level', level),
 });

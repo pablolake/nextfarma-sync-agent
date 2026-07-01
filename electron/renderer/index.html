@@ -85,6 +85,12 @@
       </div>
     </div>
 
+    <!-- Progreso en tiempo real del sync -->
+    <div id="sync-progress-panel" style="display:none">
+      <div class="section-title">Progreso del sync</div>
+      <div id="sync-progress-list" class="sync-progress-list"></div>
+    </div>
+
     <!-- Resumen último sync -->
     <div id="sync-summary-panel" style="display:none">
       <div class="section-title">Último sync</div>
@@ -498,7 +504,7 @@ ORDER  BY name</pre>
         <div id="wizard-summary" class="wizard-summary"></div>
         <div class="wizard-nav">
           <button class="btn btn-secondary" onclick="wizardNext(3)">← Modificar</button>
-          <button class="btn btn-primary btn-lg" onclick="wizardFinish()">Guardar configuracion</button>
+          <button class="btn btn-primary btn-lg" onclick="wizardFinish()">Guardar configuración</button>
         </div>
       </div>
     </div>
@@ -516,6 +522,9 @@ ORDER  BY name</pre>
       <div style="display:flex;gap:8px;align-items:center">
         <label class="checkbox-label small">
           <input type="checkbox" id="log-autoscroll" checked> Auto-scroll
+        </label>
+        <label class="checkbox-label small" title="Muestra mensajes DEBUG del motor de sync">
+          <input type="checkbox" id="log-debug" onchange="setDebugMode(this.checked)"> Debug
         </label>
         <button class="btn btn-sm btn-ghost" onclick="clearLogs()">Limpiar</button>
         <button class="btn btn-sm btn-ghost" onclick="openLogsFolder()">Carpeta</button>
