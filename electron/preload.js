@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('sync', {
   testApiKey:     (key)    => ipcRenderer.invoke('test-api-key', key),
   testDb:         (dbCfg)  => ipcRenderer.invoke('test-db', dbCfg),
   runSyncNow:     ()       => ipcRenderer.invoke('run-sync-now'),
+  cancelSync:     ()       => ipcRenderer.invoke('cancel-sync'),
   startSync:      ()       => ipcRenderer.invoke('start-sync'),
   stopSync:       ()       => ipcRenderer.invoke('stop-sync'),
   getStatus:        ()       => ipcRenderer.invoke('get-status'),

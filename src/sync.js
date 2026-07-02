@@ -77,6 +77,23 @@ async function runSync(opts = {}) {
     return { ...resultados, elapsed: '0s' };
   }
 
+  api.resetAbort();
+  const sendPing = async (status, elapsedS) => {
+    try {
+      await api.request('/api/sync/ping', {
+        method: 'POST',
+        body: {
+          status,
+          duration_s: Math.round(parseFloat(elapsedS)),
+          warnings:   resultados.warn.length,
+          errors:     resultados.error.length,
+        },
+      });
+    } catch (e) {
+      log.warn('sync/ping omitido:', e.message);
+    }
+  };
+
   const anioActual   = new Date().getFullYear();
   const anioAnterior = anioActual - 1;
   let todasVentas    = [];
@@ -249,6 +266,15 @@ async function runSync(opts = {}) {
     log.info('Recepciones: sin datos o tablas no disponibles.');
   }
 
+  if (api.isAbortRequested()) {
+    warn('Sync cancelado por el usuario — se omite el resto del ciclo.');
+    step('misc', 'Sync cancelado por el usuario', 'warn');
+    const elapsedAbort = ((Date.now() - t0) / 1000).toFixed(1);
+    log.info(`Sync cancelado tras ${elapsedAbort}s`);
+    await sendPing('cancelled', elapsedAbort);
+    return { ...resultados, elapsed: elapsedAbort, cancelled: true };
+  }
+
   // ── PASO 7: Favoritos, cierre, ticket medio, vendedores ─────────────
   step('misc', 'Favoritos, cierre mensual, ticket medio…', 'running');
   try {
@@ -310,6 +336,8 @@ async function runSync(opts = {}) {
     if (vendedores.length > 0) {
       const r = await api.request('/api/sync/vendedores', { method: 'POST', body: { vendedores } });
       log.info(`✓ Vendedores: ${r.upserts} registros`);
+    } else {
+      warn('Vendedores: 0 activos encontrados en la tabla Vendedor de Farmatic (excluyendo IdVendedor=99) — revisa que existan vendedores dados de alta y sin baja.');
     }
   } catch (e) {
     log.warn('Sync vendedores omitido:', e.message);
@@ -386,6 +414,9 @@ async function runSync(opts = {}) {
   } else {
     log.info(`Sync completado correctamente en ${elapsed}s`);
   }
+
+  await sendPing(resultados.error.length > 0 ? 'error' : resultados.warn.length > 0 ? 'warn' : 'ok', elapsed)
+
   return { ...resultados, elapsed };
 }
 

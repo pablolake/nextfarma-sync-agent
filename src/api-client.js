@@ -2,6 +2,15 @@ const log = require('./logger');
 
 const API_BASE_URL = () => (process.env.API_BASE_URL || '').replace(/\/$/, '');
 
+// ── Cancelación de sync en curso ─────────────────────────────────────────────
+let abortRequested = false;
+function requestAbort()  { abortRequested = true; }
+function resetAbort()    { abortRequested = false; }
+function isAbortRequested() { return abortRequested; }
+class SyncAbortedError extends Error {
+  constructor() { super('Sync cancelado por el usuario'); this.name = 'SyncAbortedError'; }
+}
+
 async function request(path, { method = 'GET', body } = {}, _retries = 2) {
   const base = API_BASE_URL();
   if (!base) throw new Error('API_BASE_URL no configurada');
@@ -45,6 +54,7 @@ async function enviarProductos(productos) {
   const batches   = chunk(productos, batchSize);
   const totals    = { total: 0, inserted: 0, updated: 0, errors: 0 };
   for (let i = 0; i < batches.length; i++) {
+    if (abortRequested) { log.warn(`Envío de productos cancelado (${i}/${batches.length} lotes enviados)`); throw new SyncAbortedError(); }
     log.info(`Enviando lote productos ${i + 1}/${batches.length} (${batches[i].length})...`);
     try {
       const r = await request('/api/sync/productos', { method: 'POST', body: { productos: batches[i] } });
@@ -67,6 +77,7 @@ async function enviarVentas(ventas) {
   const batches   = chunk(ventas, batchSize);
   const totals    = { total: 0, upserts: 0, errors: 0 };
   for (let i = 0; i < batches.length; i++) {
+    if (abortRequested) { log.warn(`Envío de ventas cancelado (${i}/${batches.length} lotes enviados)`); throw new SyncAbortedError(); }
     log.info(`Enviando lote ventas ${i + 1}/${batches.length} (${batches[i].length})...`);
     try {
       const r = await request('/api/sync/ventas', { method: 'POST', body: { ventas: batches[i] } });
@@ -84,6 +95,7 @@ async function enviarRecepciones(recepciones) {
   const batches   = chunk(recepciones, batchSize);
   const totals    = { total: 0, upserts: 0, errors: 0 };
   for (let i = 0; i < batches.length; i++) {
+    if (abortRequested) { log.warn(`Envío de recepciones cancelado (${i}/${batches.length} lotes enviados)`); throw new SyncAbortedError(); }
     log.info(`Enviando lote recepciones ${i + 1}/${batches.length} (${batches[i].length})...`);
     try {
       const r = await request('/api/sync/recepciones', { method: 'POST', body: { recepciones: batches[i] } });
@@ -125,4 +137,8 @@ module.exports = {
   enviarFavoritos,
   getCambiosPendientes,
   marcarCambiosProcesados,
+  requestAbort,
+  resetAbort,
+  isAbortRequested,
+  SyncAbortedError,
 };

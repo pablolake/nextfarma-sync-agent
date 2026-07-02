@@ -144,6 +144,13 @@ async function syncNow() {
   }, 3000);
 }
 
+async function cancelSyncNow() {
+  const btn = document.getElementById('btn-cancel-sync');
+  btn.disabled = true;
+  btn.textContent = 'Cancelando…';
+  await window.sync.cancelSync();
+}
+
 async function toggleSync(on) {
   if (on) {
     await window.sync.startSync();
@@ -187,20 +194,26 @@ function renderSyncProgress() {
 }
 
 function onSyncStatus(data) {
-  const dot   = document.getElementById('status-dot');
-  const label = document.getElementById('status-label');
+  const dot    = document.getElementById('status-dot');
+  const label  = document.getElementById('status-label');
+  const cancel = document.getElementById('btn-cancel-sync');
 
   if (data.running) {
     syncSteps = [];
     renderSyncProgress();
     dot.className = 'status-dot syncing';
     label.textContent = 'Sincronizando…';
+    cancel.style.display = '';
+    cancel.disabled = false;
+    cancel.textContent = 'Cancelar sync';
   } else if (data.error) {
     dot.className = 'status-dot error';
     label.textContent = 'Error en sync';
+    cancel.style.display = 'none';
   } else {
     dot.className = 'status-dot ok';
     label.textContent = 'Activo';
+    cancel.style.display = 'none';
     if (data.lastSyncAt) {
       document.getElementById('last-sync-label').textContent = 'Última sync: ' + formatRelative(data.lastSyncAt);
     }

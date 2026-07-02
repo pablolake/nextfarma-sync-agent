@@ -207,6 +207,13 @@ ipcMain.handle('stop-sync', () => {
   return { ok: true };
 });
 
+ipcMain.handle('cancel-sync', () => {
+  if (!isSyncing) return { ok: false, error: 'No hay ningún sync en curso' };
+  const api = require('../src/api-client');
+  api.requestAbort();
+  return { ok: true };
+});
+
 ipcMain.handle('get-status', () => ({
   isSyncing,
   lastSyncAt,
@@ -344,6 +351,11 @@ function buildTrayMenu() {
       label:   '🔄 Sincronizar ahora',
       enabled: !isSyncing,
       click:   () => runSyncOnce(),
+    },
+    {
+      label:   '✕ Cancelar sync en curso',
+      visible: isSyncing,
+      click:   () => require('../src/api-client').requestAbort(),
     },
     { type: 'separator' },
     { label: 'Salir', click: () => { app.quit(); } },
