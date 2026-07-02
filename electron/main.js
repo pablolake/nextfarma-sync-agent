@@ -16,6 +16,7 @@ let tenantName         = null;
 let syncEnabled        = false;
 let localServerStarted = false;
 let lastSyncResults    = null;
+let logListenerAttached = false;
 
 // ── Single instance lock ─────────────────────────────────────────────────────
 const gotLock = app.requestSingleInstanceLock();
@@ -127,12 +128,23 @@ function startLocalServerIfNeeded() {
   }
 }
 
+function startServicesIfConfigured(cfg) {
+  if (!cfg.apiKey) return;
+  applyConfig(cfg);
+  if (!logListenerAttached) {
+    logListenerAttached = true;
+    const log = require('../src/logger');
+    log.emitter.on('log', (entry) => send('log', entry));
+  }
+  startLocalServerIfNeeded();
+}
+
 // ── IPC handlers ─────────────────────────────────────────────────────────────
 ipcMain.handle('load-config', () => store.get('config', {}));
 
 ipcMain.handle('save-config', (_, cfg) => {
   store.set('config', cfg);
-  applyConfig(cfg);
+  startServicesIfConfigured(cfg);
   app.setLoginItemSettings({ openAtLogin: cfg.autostart === true });
 });
 
@@ -370,13 +382,8 @@ app.whenReady().then(() => {
   store = new Store({ name: 'nextfarma-sync', cwd: app.getPath('userData') });
   const cfg = store.get('config', {});
 
-  if (cfg.apiKey) {
-    applyConfig(cfg);
-    const log = require('../src/logger');
-    log.emitter.on('log', (entry) => send('log', entry));
-    startLocalServerIfNeeded();
-    if (cfg.autosync !== false) startAutoSync();
-  }
+  startServicesIfConfigured(cfg);
+  if (cfg.apiKey && cfg.autosync !== false) startAutoSync();
 
   createWindow();
   createTray();
