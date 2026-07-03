@@ -604,11 +604,22 @@ async function fetchTicketMedio(anio) {
 // Obtiene todos los vendedores activos de Farmatic (sin filtro de IDs)
 async function fetchVendedoresFarmatic() {
   const p = await getPool();
+  // La columna de baja de Vendedor no es uniforme entre instalaciones de Farmatic
+  // (algunas no la tienen en absoluto) — se detecta antes de usarla, igual que ya
+  // se hace con Articu en fetchProductos().
+  const colsR = await p.request().query(
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Vendedor'`
+  ).catch(() => ({ recordset: [] }));
+  const colsVendedor = new Set(colsR.recordset.map(r => String(r.COLUMN_NAME)));
+  const colBaja = ['Baja', 'BajaVend', 'FechaBaja'].find(c => colsVendedor.has(c)) || null;
+  const whereBaja = colBaja
+    ? (colBaja === 'FechaBaja' ? `${colBaja} IS NULL AND ` : `(${colBaja} IS NULL OR ${colBaja} = 0) AND `)
+    : '';
+
   const result = await p.request().query(`
     SELECT IdVendedor AS id, LTRIM(RTRIM(Nombre)) AS nombre
     FROM Vendedor
-    WHERE (Baja IS NULL OR Baja = 0)
-      AND IdVendedor != 99
+    WHERE ${whereBaja}IdVendedor != 99
     ORDER BY IdVendedor
   `).catch(err => { log.warn('fetchVendedoresFarmatic falló:', err.message); return { recordset: [] }; });
   return result.recordset;

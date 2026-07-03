@@ -128,6 +128,17 @@ async function marcarCambiosProcesados(tenantId, ids) {
   });
 }
 
+async function getListaNegraPendiente(tenantId) {
+  return request(`/api/${tenantId}/lista-negra-pendiente`);
+}
+
+async function marcarListaNegraProcesada(tenantId, ids) {
+  return request(`/api/${tenantId}/lista-negra-pendiente/procesar`, {
+    method: 'POST',
+    body: { ids },
+  });
+}
+
 module.exports = {
   request,
   status,

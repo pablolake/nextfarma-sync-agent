@@ -475,6 +475,14 @@ async function syncNuevosCronicos(farmaticPool, apiClient, log) {
   const db = new Database(dbPath);
 
   try {
+    // Telefono2 no existe en todas las instalaciones de Farmatic — se detecta antes
+    // de usarla (mismo patrón que fetchProductos()/fetchVendedoresFarmatic()).
+    const colsR = await farmaticPool.request().query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Cliente'`
+    ).catch(() => ({ recordset: [] }));
+    const colsCliente = new Set(colsR.recordset.map(r => String(r.COLUMN_NAME)));
+    const selTelefono2 = colsCliente.has('Telefono2') ? 'c.Telefono2' : 'NULL';
+
     const result = await farmaticPool.request().query(`
       SELECT
         CAST(r.XClie_IdCliente AS INT) AS id_farmatic,
@@ -482,7 +490,7 @@ async function syncNuevosCronicos(farmaticPool, apiClient, log) {
         c.Apellido1 AS apellido1,
         c.Apellido2 AS apellido2,
         c.Telefono  AS telefono,
-        c.Telefono2 AS telefono2
+        ${selTelefono2} AS telefono2
       FROM ClienteRGPD r
       LEFT JOIN Cliente c ON CAST(c.IdCliente AS VARCHAR) = LTRIM(RTRIM(r.XClie_IdCliente))
       WHERE r.OpcRGPD = ${parseInt(process.env.RGPD_OPCION, 10) || 31}
