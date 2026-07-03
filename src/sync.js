@@ -401,6 +401,23 @@ async function runSync(opts = {}) {
     log.warn('Cambios pendientes omitidos:', e.message);
   }
 
+  try {
+    const tenantId = process.env.TENANT_ID;
+    if (tenantId) {
+      const { cambios } = await api.getListaNegraPendiente(tenantId);
+      if (cambios && cambios.length > 0) {
+        log.info('Lista Negra: ' + cambios.length + ' cambios a procesar');
+        const r = await farmatic.procesarListaNegraPendiente(cambios);
+        log.info(`Lista Negra procesada: ${r.procesados} OK, ${r.errores} errores`);
+        if (r.ids_procesados && r.ids_procesados.length > 0) {
+          await api.marcarListaNegraProcesada(tenantId, r.ids_procesados);
+        }
+      }
+    }
+  } catch (e) {
+    log.warn('Lista Negra omitida:', e.message);
+  }
+
   step('cronicos', 'Crónicos y encargos sincronizados', 'ok');
 
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);

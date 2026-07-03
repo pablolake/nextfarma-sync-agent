@@ -699,6 +699,55 @@ async function procesarCambiosPendientes(cambios) {
   return { procesados, errores, ids_procesados };
 }
 
+// Lista Negra: pipeline independiente de getCategoriaLista()/procesarCambiosPendientes.
+// Usa su propio env var (LIST_NEGRA) y, si no está configurado, simplemente omite
+// el procesado sin afectar al resto del sync (favoritos/categorías siguen su curso
+// aunque la instalación no haya pasado por el 7º paso del wizard).
+async function procesarListaNegraPendiente(cambios) {
+  if (!cambios || cambios.length === 0) return { procesados: 0, errores: 0, ids_procesados: [] };
+  const listaNegraId = parseInt(process.env.LIST_NEGRA, 10);
+  if (!listaNegraId) {
+    log.warn('Lista Negra omitida: configura la lista en el Asistente (paso Listas) para activar la escritura en Farmatic');
+    return { procesados: 0, errores: 0, ids_procesados: [] };
+  }
+  const p = await getPool();
+  let procesados = 0, errores = 0;
+  const ids_procesados = [];
+
+  for (const cambio of cambios) {
+    try {
+      const { cn, lista_negra } = cambio;
+      if (lista_negra) {
+        await p.request()
+          .input('lista', sql.Int, listaNegraId)
+          .input('cn',    sql.Int, cn)
+          .query(`
+            IF NOT EXISTS (
+              SELECT 1 FROM ItemListaArticu
+              WHERE XItem_IdLista = @lista AND XItem_IdArticu = @cn
+            )
+            INSERT INTO ItemListaArticu (XItem_IdLista, XItem_IdArticu)
+            VALUES (@lista, @cn)
+          `);
+        log.info(`Lista Negra: CN ${cn} añadido`);
+      } else {
+        await p.request()
+          .input('lista', sql.Int, listaNegraId)
+          .input('cn',    sql.Int, cn)
+          .query(`DELETE FROM ItemListaArticu WHERE XItem_IdLista = @lista AND XItem_IdArticu = @cn`);
+        log.info(`Lista Negra: CN ${cn} retirado`);
+      }
+      procesados++;
+      ids_procesados.push(cambio.id);
+    } catch (err) {
+      log.error('Error procesando lista negra CN ' + cambio.cn + ':', err.message);
+      errores++;
+    }
+  }
+
+  return { procesados, errores, ids_procesados };
+}
+
 // ── Métodos del asistente de configuración ────────────────────────────────
 // Devuelve todos los vendedores de Farmatic (sin filtros) para que el usuario
 // identifique cuáles excluir del análisis
@@ -914,6 +963,7 @@ module.exports = {
   verificarTablas,
   fetch4DBDescuentos,
   procesarCambiosPendientes,
+  procesarListaNegraPendiente,
   fetchVendedoresWizard,
   fetchLabsWizard,
   fetchListasWizard,

@@ -15,7 +15,7 @@ const wz = {
   opcRGPD: 31,
   scUmbral: 2500, scCN: 5, scKT: 10,
   lists: [],            // all lists from Farmatic
-  listStar: null, listInc: null, listMrotA: null, listMrotB: null, listResto: null, listPar: null,
+  listStar: null, listInc: null, listMrotA: null, listMrotB: null, listResto: null, listPar: null, listNegra: null,
 };
 
 /* ── Init ───────────────────────────────────────────────────────────── */
@@ -638,6 +638,7 @@ async function wizardLoadLists() {
     ['wz-list-mrotb', 'listMaxRotB',         104],
     ['wz-list-resto', 'listResto',           105],
     ['wz-list-par',   'listParados',         106],
+    ['wz-list-negra', 'listNegra',           null],
   ];
   for (const [selId, key, def] of fields) {
     const sel = document.getElementById(selId);
@@ -656,6 +657,7 @@ function wizardCollectLists() {
   wz.listMrotB = parseInt(document.getElementById('wz-list-mrotb').value) || null;
   wz.listResto = parseInt(document.getElementById('wz-list-resto').value) || null;
   wz.listPar   = parseInt(document.getElementById('wz-list-par').value)   || null;
+  wz.listNegra = parseInt(document.getElementById('wz-list-negra').value) || null;
 }
 
 async function wizardDiag(step, key, label) {
@@ -786,6 +788,7 @@ async function wizardFinish() {
     listMaxRotB:          wz.listMrotB,
     listResto:            wz.listResto,
     listParados:          wz.listPar,
+    listNegra:            wz.listNegra,
   };
 
   await window.sync.wizardSave(wizardCfg);
