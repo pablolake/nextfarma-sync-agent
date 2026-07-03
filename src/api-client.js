@@ -117,6 +117,15 @@ async function enviarFavoritos(favoritos) {
   }
 }
 
+async function enviarSchemaInfo(schema) {
+  try {
+    return await request('/api/sync/schema-info', { method: 'POST', body: schema });
+  } catch (err) {
+    log.warn('enviarSchemaInfo falló:', err.message);
+    return { ok: false };
+  }
+}
+
 async function getCambiosPendientes(tenantId) {
   return request(`/api/${tenantId}/cambios-pendientes`);
 }
@@ -148,6 +157,7 @@ module.exports = {
   enviarFavoritos,
   getCambiosPendientes,
   marcarCambiosProcesados,
+  enviarSchemaInfo,
   requestAbort,
   resetAbort,
   isAbortRequested,

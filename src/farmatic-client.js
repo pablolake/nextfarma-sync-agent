@@ -63,6 +63,69 @@ async function closePool() {
 const CONSEJO_DB    = () => process.env.DB_CONSEJO || 'Consejo';
 const DESCUENTOS_DIR = () => process.env.DESCUENTOS_DIR || path.join(process.env.USERDATA_PATH || process.cwd(), 'descuentos');
 
+// ── Barrido de esquema ───────────────────────────────────────────────────────
+// Farmatic no es uniforme entre instalaciones (tablas/columnas que en unas
+// existen y en otras no — el caso real que motivó esto: Vendedor.Baja y
+// Cliente.Telefono2 ausentes en una instalación). En vez de descubrir estas
+// diferencias una a una cuando algo falla en producción, se hace un barrido al
+// principio de cada sync sobre las tablas que el agente usa, y se manda a
+// NextFarma para poder diagnosticar instalaciones concretas sin depender de
+// que la farmacia pegue logs.
+const TABLAS_ESPERADAS = [
+  'Articu', 'GeneArti', 'LineaVenta', 'Venta', 'Vendedor', 'Cliente', 'ClienteRGPD',
+  'Recep', 'LineaRecep', 'ListaArticu', 'Lista', 'Listas', 'ItemListaArticu',
+  '_4DB_CAT_CatalogoArt', '_4DB_CAT_Models',
+];
+
+let schemaCache = null;
+function resetSchemaCache() { schemaCache = null; }
+
+async function discoverSchema() {
+  if (schemaCache) return schemaCache;
+  const p   = await getPool();
+  const cdb = CONSEJO_DB();
+  const tablas = {};
+
+  try {
+    const tablasR = await p.request().query(
+      `SELECT name FROM sys.tables WHERE name IN (${TABLAS_ESPERADAS.map(t => `'${t}'`).join(',')})`
+    );
+    const existentes = new Set(tablasR.recordset.map(r => r.name));
+    if (existentes.size > 0) {
+      const colsR = await p.request().query(`
+        SELECT TABLE_NAME, COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_NAME IN (${[...existentes].map(t => `'${t}'`).join(',')})
+      `);
+      for (const t of existentes) tablas[t] = [];
+      for (const row of colsR.recordset) tablas[row.TABLE_NAME].push(row.COLUMN_NAME);
+    }
+
+    // BP_CONJARTI/BP_CONJUNTOS viven en la BD del Consejo, no en la de Farmatic.
+    const consejoR = await p.request().query(
+      `SELECT name FROM ${cdb}.sys.tables WHERE name IN ('BP_CONJARTI','BP_CONJUNTOS')`
+    ).catch(() => ({ recordset: [] }));
+    const existentesConsejo = new Set(consejoR.recordset.map(r => r.name));
+    if (existentesConsejo.size > 0) {
+      const colsConsejoR = await p.request().query(`
+        SELECT TABLE_NAME, COLUMN_NAME FROM ${cdb}.INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_NAME IN (${[...existentesConsejo].map(t => `'${t}'`).join(',')})
+      `).catch(() => ({ recordset: [] }));
+      for (const t of existentesConsejo) tablas[t] = [];
+      for (const row of colsConsejoR.recordset) tablas[row.TABLE_NAME].push(row.COLUMN_NAME);
+    }
+
+    const faltantes = TABLAS_ESPERADAS.filter(t => !tablas[t]);
+    schemaCache = { tablas, tablas_esperadas_faltantes: faltantes };
+    if (faltantes.length > 0) {
+      log.warn(`Esquema Farmatic: no se encontraron estas tablas esperadas: ${faltantes.join(', ')}`);
+    }
+  } catch (err) {
+    log.warn('discoverSchema falló:', err.message);
+    schemaCache = { tablas: {}, tablas_esperadas_faltantes: TABLAS_ESPERADAS, error: err.message };
+  }
+  return schemaCache;
+}
+
 function cargarDescuentosExcel() {
   const dtos = new Map();
   const dir  = DESCUENTOS_DIR();
@@ -964,6 +1027,8 @@ module.exports = {
   fetch4DBDescuentos,
   procesarCambiosPendientes,
   procesarListaNegraPendiente,
+  discoverSchema,
+  resetSchemaCache,
   fetchVendedoresWizard,
   fetchLabsWizard,
   fetchListasWizard,

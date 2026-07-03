@@ -77,6 +77,18 @@ async function runSync(opts = {}) {
     return { ...resultados, elapsed: '0s' };
   }
 
+  // ── PASO 1b: Barrido de esquema Farmatic ─────────────────────────────
+  // Se cachea por ciclo (farmatic.resetSchemaCache() la limpia en cada runSync)
+  // y se manda a NextFarma para poder ver de qué tablas/columnas dispone esta
+  // instalación concreta sin depender de que la farmacia pegue logs.
+  farmatic.resetSchemaCache();
+  try {
+    const schema = await farmatic.discoverSchema();
+    await api.enviarSchemaInfo(schema);
+  } catch (e) {
+    log.warn('Barrido de esquema omitido:', e.message);
+  }
+
   api.resetAbort();
   const sendPing = async (status, elapsedS) => {
     try {
