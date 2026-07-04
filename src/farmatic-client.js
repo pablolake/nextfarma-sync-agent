@@ -906,25 +906,35 @@ async function fetchLabsWizard() {
 // Devuelve todas las listas de artículos de Farmatic con nombre y cantidad de ítems
 async function fetchListasWizard() {
   const p = await getPool();
-  // Intentar obtener nombres de listas desde ListaArticu (tabla de cabeceras)
+  // El nombre de la cabecera de lista varía por instalación: unas Farmatic la llaman
+  // "Nombre", otras "Descripcion" (caso real: farmacia jose). Se detecta la columna real
+  // en vez de asumir un nombre fijo — mismo patrón que Vendedor.Baja/Cliente.Telefono2.
   const tbl = await p.request().query(
     `SELECT name FROM sys.tables WHERE name IN ('ListaArticu', 'Lista', 'Listas')`
   ).catch(() => ({ recordset: [] }));
   const tablaNombres = tbl.recordset[0]?.name;
 
   if (tablaNombres) {
-    const r = await p.request().query(`
-      SELECT
-        l.IdLista  AS id,
-        LTRIM(RTRIM(l.Nombre)) AS nombre,
-        COUNT(i.XItem_IdArticu) AS n_items
-      FROM ${tablaNombres} l
-      LEFT JOIN ItemListaArticu i ON i.XItem_IdLista = l.IdLista
-      GROUP BY l.IdLista, l.Nombre
-      HAVING COUNT(i.XItem_IdArticu) > 0
-      ORDER BY l.IdLista
-    `).catch(() => ({ recordset: [] }));
-    if (r.recordset.length) return r.recordset.map(r => ({ id: r.id, nombre: r.nombre || `Lista ${r.id}`, n_items: Number(r.n_items) }));
+    const colsR = await p.request().query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${tablaNombres}'`
+    ).catch(() => ({ recordset: [] }));
+    const cols = new Set(colsR.recordset.map(r => r.COLUMN_NAME));
+    const colNombre = cols.has('Nombre') ? 'Nombre' : cols.has('Descripcion') ? 'Descripcion' : null;
+
+    if (colNombre) {
+      const r = await p.request().query(`
+        SELECT
+          l.IdLista  AS id,
+          LTRIM(RTRIM(l.${colNombre})) AS nombre,
+          COUNT(i.XItem_IdArticu) AS n_items
+        FROM ${tablaNombres} l
+        LEFT JOIN ItemListaArticu i ON i.XItem_IdLista = l.IdLista
+        GROUP BY l.IdLista, l.${colNombre}
+        HAVING COUNT(i.XItem_IdArticu) > 0
+        ORDER BY l.IdLista
+      `).catch(() => ({ recordset: [] }));
+      if (r.recordset.length) return r.recordset.map(r => ({ id: r.id, nombre: r.nombre || `Lista ${r.id}`, n_items: Number(r.n_items) }));
+    }
   }
 
   // Fallback: inferir IDs y conteos directamente desde ItemListaArticu

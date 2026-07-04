@@ -536,24 +536,38 @@ async function syncNuevosCronicos(farmaticPool, apiClient, log) {
   const db = new Database(dbPath);
 
   try {
-    // Telefono2 no existe en todas las instalaciones de Farmatic — se detecta antes
-    // de usarla (mismo patrón que fetchProductos()/fetchVendedoresFarmatic()).
+    // El esquema de Cliente varía mucho entre instalaciones de Farmatic — se detectan
+    // las columnas reales en vez de asumir nombres fijos (mismo patrón que
+    // fetchProductos()/fetchVendedoresFarmatic()). Caso real (farmacia jose): no existen
+    // Nombre/Apellido1/Apellido2/Telefono/IdCliente — en su lugar hay PER_NOMBRE/
+    // FIS_NOMBRE (nombre personal vs. fiscal/facturación), PER_TELEFONO/FIS_TELEFONO
+    // e IDCLIENTE. Se prioriza siempre la variante "personal" sobre la "fiscal": la
+    // fiscal puede ser una empresa o un familiar distinto del paciente real.
     const colsR = await farmaticPool.request().query(
       `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Cliente'`
     ).catch(() => ({ recordset: [] }));
     const colsCliente = new Set(colsR.recordset.map(r => String(r.COLUMN_NAME)));
-    const selTelefono2 = colsCliente.has('Telefono2') ? 'c.Telefono2' : 'NULL';
+    const pick = (...candidatos) => {
+      const encontrada = candidatos.find(c => colsCliente.has(c));
+      return encontrada ? `c.${encontrada}` : 'NULL';
+    };
+    const selNombre    = pick('Nombre', 'PER_NOMBRE', 'FIS_NOMBRE');
+    const selApellido1 = pick('Apellido1');
+    const selApellido2 = pick('Apellido2');
+    const selTelefono  = pick('Telefono', 'PER_TELEFONO', 'FIS_TELEFONO');
+    const selTelefono2 = pick('Telefono2');
+    const colIdCliente = colsCliente.has('IdCliente') ? 'IdCliente' : colsCliente.has('IDCLIENTE') ? 'IDCLIENTE' : 'IdCliente';
 
     const result = await farmaticPool.request().query(`
       SELECT
         CAST(r.XClie_IdCliente AS INT) AS id_farmatic,
-        c.Nombre    AS nombre,
-        c.Apellido1 AS apellido1,
-        c.Apellido2 AS apellido2,
-        c.Telefono  AS telefono,
+        ${selNombre}    AS nombre,
+        ${selApellido1} AS apellido1,
+        ${selApellido2} AS apellido2,
+        ${selTelefono}  AS telefono,
         ${selTelefono2} AS telefono2
       FROM ClienteRGPD r
-      LEFT JOIN Cliente c ON CAST(c.IdCliente AS VARCHAR) = LTRIM(RTRIM(r.XClie_IdCliente))
+      LEFT JOIN Cliente c ON CAST(c.${colIdCliente} AS VARCHAR) = LTRIM(RTRIM(r.XClie_IdCliente))
       WHERE r.OpcRGPD = ${parseInt(process.env.RGPD_OPCION, 10) || 31}
     `).catch(e => { log.warn('RGPD query error:', e.message); return { recordset: [] }; });
 
