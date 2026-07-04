@@ -617,23 +617,30 @@ async function fetch4DBDescuentos() {
   })).filter(r => /^\d{5,}$/.test(r.codigo_nacional));
 }
 
-// Lista IDs: configuradas por el wizard (paso Listas). Sin configurar → null (leer/escribir desactivado).
-// LIST_CONSOLIDADO es opcional (no todas las instalaciones de Farmatic distinguen esta
-// categoría en una lista propia — caso real: farmacia jose sí la tiene) — si falta, las
-// otras 6 categorías siguen funcionando igual; solo CONSOLIDADO no se lee/escribe.
+// Las 7 categorías y su env var — cada una es independiente. Antes exigíamos las 6
+// principales completas o no se leía/escribía nada; eso hacía que, si una farmacia real
+// no distinguía o no mapeaba bien una sola categoría (nombres de lista distintos a los
+// esperados, categoría que no usan...), se perdiera TODO. Ahora cada categoría que tenga
+// su env var puesta se lee/escribe; las que falten simplemente no aportan nada para esa
+// categoría concreta — se sigue trayendo lo que sí hay y se afina el mapeo más adelante.
+const CATEGORIA_ENV = {
+  INCENTIVADOS_STAR: 'LIST_INCENTIVADOS_STAR',
+  INCENTIVADOS:       'LIST_INCENTIVADOS',
+  MAX_ROTACION_A:     'LIST_MAX_ROT_A',
+  MAX_ROTACION_B:     'LIST_MAX_ROT_B',
+  RESTO:              'LIST_RESTO',
+  PARADOS:            'LIST_PARADOS',
+  CONSOLIDADO:        'LIST_CONSOLIDADO',
+};
+
+// Lista IDs → categoría (para leer favoritos de Farmatic). Sin ninguna configurada → null
+// (leer desactivado del todo). Con al menos una configurada, se usa esa parcialmente.
 function getListaCategoria() {
-  const keys = ['LIST_INCENTIVADOS_STAR','LIST_INCENTIVADOS','LIST_MAX_ROT_A','LIST_MAX_ROT_B','LIST_RESTO','LIST_PARADOS'];
-  if (keys.some(k => !process.env[k])) return null;
-  const map = {
-    [parseInt(process.env.LIST_INCENTIVADOS_STAR)]: 'INCENTIVADOS_STAR',
-    [parseInt(process.env.LIST_INCENTIVADOS)]:       'INCENTIVADOS',
-    [parseInt(process.env.LIST_MAX_ROT_A)]:          'MAX_ROTACION_A',
-    [parseInt(process.env.LIST_MAX_ROT_B)]:          'MAX_ROTACION_B',
-    [parseInt(process.env.LIST_RESTO)]:              'RESTO',
-    [parseInt(process.env.LIST_PARADOS)]:            'PARADOS',
-  };
-  if (process.env.LIST_CONSOLIDADO) map[parseInt(process.env.LIST_CONSOLIDADO)] = 'CONSOLIDADO';
-  return map;
+  const map = {};
+  for (const [categoria, envKey] of Object.entries(CATEGORIA_ENV)) {
+    if (process.env[envKey]) map[parseInt(process.env[envKey])] = categoria;
+  }
+  return Object.keys(map).length ? map : null;
 }
 
 async function fetchFavoritosListas() {
@@ -755,30 +762,17 @@ async function fetchVendedoresFarmatic() {
   return result.recordset;
 }
 
+// Categoría → lista ID (para escribir favoritos en Farmatic). Mismo criterio permisivo
+// que getListaCategoria(): cada categoría configurada se escribe, las que falten se
+// omiten individualmente (procesarCambiosPendientes ya loguea "categoría desconocida"
+// por cada cambio que caiga en una categoría sin lista, sin tocar las demás).
 function getCategoriaLista() {
-  const keys = ['LIST_INCENTIVADOS_STAR','LIST_INCENTIVADOS','LIST_MAX_ROT_A','LIST_MAX_ROT_B','LIST_RESTO','LIST_PARADOS'];
-  if (keys.some(k => !process.env[k])) return null;
-  const map = {
-    'INCENTIVADOS_STAR': parseInt(process.env.LIST_INCENTIVADOS_STAR),
-    'INCENTIVADOS':      parseInt(process.env.LIST_INCENTIVADOS),
-    'MAX_ROTACION_A':    parseInt(process.env.LIST_MAX_ROT_A),
-    'MAX_ROTACION_B':    parseInt(process.env.LIST_MAX_ROT_B),
-    'RESTO':             parseInt(process.env.LIST_RESTO),
-    'PARADOS':           parseInt(process.env.LIST_PARADOS),
-  };
-  if (process.env.LIST_CONSOLIDADO) map['CONSOLIDADO'] = parseInt(process.env.LIST_CONSOLIDADO);
-  return map;
+  const map = {};
+  for (const [categoria, envKey] of Object.entries(CATEGORIA_ENV)) {
+    if (process.env[envKey]) map[categoria] = parseInt(process.env[envKey]);
+  }
+  return Object.keys(map).length ? map : null;
 }
-
-const CATEGORIA_ENV = {
-  INCENTIVADOS_STAR: 'LIST_INCENTIVADOS_STAR',
-  INCENTIVADOS:       'LIST_INCENTIVADOS',
-  MAX_ROTACION_A:     'LIST_MAX_ROT_A',
-  MAX_ROTACION_B:     'LIST_MAX_ROT_B',
-  RESTO:              'LIST_RESTO',
-  PARADOS:            'LIST_PARADOS',
-  CONSOLIDADO:        'LIST_CONSOLIDADO',
-};
 
 // Crea en Farmatic (ListaArticu/ItemListaArticu) las listas de categoría que falten y
 // siembra un favorito inicial por grupo homogéneo = el CN con más unidades vendidas en
