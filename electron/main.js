@@ -221,6 +221,7 @@ ipcMain.handle('get-status', () => ({
   tenantName,
   syncEnabled,
   lastSyncResults,
+  version: app.getVersion(),
 }));
 
 ipcMain.handle('get-cronicos-stats', () => {

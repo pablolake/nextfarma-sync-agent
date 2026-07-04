@@ -242,6 +242,7 @@ function updateSyncUI(s) {
   toggle.checked = s.syncEnabled;
   document.getElementById('sync-toggle-label').textContent = s.syncEnabled ? 'Activa' : 'Desactivada';
   if (s.tenantName) document.getElementById('tenant-name').textContent = s.tenantName;
+  if (s.version) document.getElementById('app-version').textContent = 'v' + s.version;
   if (s.lastSyncAt) {
     document.getElementById('last-sync-label').textContent = 'Última sync: ' + formatRelative(s.lastSyncAt);
   }
