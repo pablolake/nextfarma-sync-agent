@@ -148,6 +148,36 @@ async function marcarListaNegraProcesada(tenantId, ids) {
   });
 }
 
+// Flags remotas del tenant: si se puede escribir en Farmatic y si está activada la
+// auto-creación de listas de categoría cuando no existe ninguna (ver farmatic-client.js).
+async function obtenerConfigSync() {
+  try {
+    return await request('/api/sync/config');
+  } catch (err) {
+    log.warn('obtenerConfigSync falló:', err.message);
+    return { farmatic_write_enabled: false, farmatic_autocrear_listas: false };
+  }
+}
+
+async function obtenerCategoriasActuales() {
+  try {
+    const r = await request('/api/sync/categorias-actuales');
+    return r.categorias || [];
+  } catch (err) {
+    log.warn('obtenerCategoriasActuales falló:', err.message);
+    return [];
+  }
+}
+
+async function reportarListasCreadas(payload) {
+  try {
+    return await request('/api/sync/listas-creadas', { method: 'POST', body: payload });
+  } catch (err) {
+    log.warn('reportarListasCreadas falló:', err.message);
+    return { ok: false };
+  }
+}
+
 module.exports = {
   request,
   status,
@@ -157,7 +187,15 @@ module.exports = {
   enviarFavoritos,
   getCambiosPendientes,
   marcarCambiosProcesados,
+  // getListaNegraPendiente/marcarListaNegraProcesada estaban definidas pero nunca
+  // exportadas — sync.js las llamaba vía api.getListaNegraPendiente() y siempre
+  // fallaba en silencio (atrapado por el try/catch de "Lista Negra omitida").
+  getListaNegraPendiente,
+  marcarListaNegraProcesada,
   enviarSchemaInfo,
+  obtenerConfigSync,
+  obtenerCategoriasActuales,
+  reportarListasCreadas,
   requestAbort,
   resetAbort,
   isAbortRequested,

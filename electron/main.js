@@ -81,6 +81,23 @@ async function runSyncOnce() {
     lastSyncResults = await runSync({
       onStep: (stepData) => send('sync-step', stepData),
     });
+    // Si este ciclo creó listas de categoría en Farmatic (ver sync.js), se persisten en la
+    // config local para que getCategoriaLista() las reconozca desde ya, sin reiniciar la app.
+    if (lastSyncResults?.listasCreadas && Object.keys(lastSyncResults.listasCreadas).length) {
+      const CATEGORIA_A_CAMPO = {
+        INCENTIVADOS_STAR: 'listIncentivadosStar', INCENTIVADOS: 'listIncentivados',
+        MAX_ROTACION_A:    'listMaxRotA',           MAX_ROTACION_B: 'listMaxRotB',
+        RESTO:             'listResto',             PARADOS:        'listParados',
+        CONSOLIDADO:       'listConsolidado',
+      };
+      const cfg = store.get('config', {});
+      cfg.wizard = cfg.wizard || {};
+      for (const [categoria, id] of Object.entries(lastSyncResults.listasCreadas)) {
+        if (CATEGORIA_A_CAMPO[categoria]) cfg.wizard[CATEGORIA_A_CAMPO[categoria]] = id;
+      }
+      store.set('config', cfg);
+      applyConfig(cfg);
+    }
     lastSyncAt = new Date().toISOString();
     send('sync-status', { running: false, lastSyncAt });
     tray?.setToolTip('NextFarma Sync · activo');

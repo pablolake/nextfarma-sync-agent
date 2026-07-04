@@ -770,6 +770,118 @@ function getCategoriaLista() {
   return map;
 }
 
+const CATEGORIA_ENV = {
+  INCENTIVADOS_STAR: 'LIST_INCENTIVADOS_STAR',
+  INCENTIVADOS:       'LIST_INCENTIVADOS',
+  MAX_ROTACION_A:     'LIST_MAX_ROT_A',
+  MAX_ROTACION_B:     'LIST_MAX_ROT_B',
+  RESTO:              'LIST_RESTO',
+  PARADOS:            'LIST_PARADOS',
+  CONSOLIDADO:        'LIST_CONSOLIDADO',
+};
+
+// Crea en Farmatic (ListaArticu/ItemListaArticu) las listas de categoría que falten y
+// siembra un favorito inicial por grupo homogéneo = el CN con más unidades vendidas en
+// los últimos 12 meses. SOLO se debe llamar cuando ya se ha confirmado (fetchListasWizard
+// vacío) que esta instalación no tiene ninguna lista real — si tuviera alguna sin mapear
+// no se toca nada, eso requiere revisión manual, no autocreación. Nunca pisa una categoría
+// que ya tenga env var configurada. Cualquier duda sobre el esquema real (tabla, columna
+// de nombre, autonumérico) aborta sin escribir nada — mejor no crear nada que crear algo
+// mal en una base de datos de producción real.
+async function crearListasCategoriaYFavoritosIniciales(categoriasActuales) {
+  const p = await getPool();
+
+  const tblR = await p.request().query(`SELECT name FROM sys.tables WHERE name = 'ListaArticu'`)
+    .catch(() => ({ recordset: [] }));
+  if (!tblR.recordset.length) {
+    log.warn('Auto-creación de listas omitida: no existe la tabla ListaArticu');
+    return null;
+  }
+  const colsR = await p.request().query(
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'ListaArticu'`
+  ).catch(() => ({ recordset: [] }));
+  const cols = new Set(colsR.recordset.map(r => String(r.COLUMN_NAME)));
+  const colNombre = cols.has('Nombre') ? 'Nombre' : cols.has('Descripcion') ? 'Descripcion' : null;
+  if (!colNombre) {
+    log.warn('Auto-creación de listas omitida: ListaArticu no tiene columna Nombre/Descripcion reconocible');
+    return null;
+  }
+  const identityR = await p.request().query(
+    `SELECT COLUMNPROPERTY(OBJECT_ID('ListaArticu'), 'IdLista', 'IsIdentity') AS es_identity`
+  ).catch(() => ({ recordset: [] }));
+  if (identityR.recordset[0]?.es_identity !== 1) {
+    log.warn('Auto-creación de listas omitida: ListaArticu.IdLista no es autonumérico, no se puede generar un id seguro');
+    return null;
+  }
+
+  const faltantes = Object.keys(CATEGORIA_ENV).filter(cat => !process.env[CATEGORIA_ENV[cat]]);
+  if (!faltantes.length) return null;
+
+  const creadas = [];
+  for (const categoria of faltantes) {
+    try {
+      const r = await p.request()
+        .input('nombre', sql.VarChar, `NextFarma - ${categoria}`)
+        .query(`INSERT INTO ListaArticu (${colNombre}) OUTPUT INSERTED.IdLista AS id VALUES (@nombre)`);
+      const nuevoId = r.recordset[0]?.id;
+      if (nuevoId) {
+        creadas.push({ categoria, lista_id: nuevoId });
+        process.env[CATEGORIA_ENV[categoria]] = String(nuevoId);
+      }
+    } catch (err) {
+      log.warn(`No se pudo crear la lista de ${categoria}:`, err.message);
+    }
+  }
+  if (!creadas.length) return null;
+
+  const fac = await detectarFiltroFacturada(p);
+  const excl = excludedVendors();
+  const exclClause = excl.length ? `AND v.XVend_IdVendedor NOT IN (${excl.join(',')})` : '';
+  const hoy = new Date();
+  const cutoff = (hoy.getFullYear() - 1) * 100 + (hoy.getMonth() + 1); // últimos ~12 meses
+
+  const topR = await p.request().query(`
+    SELECT ch, cn FROM (
+      SELECT g.IdGrupoGen AS ch, lv.Codigo AS cn, SUM(lv.Cantidad) AS uds,
+        ROW_NUMBER() OVER (PARTITION BY g.IdGrupoGen ORDER BY SUM(lv.Cantidad) DESC) AS rn
+      FROM LineaVenta lv
+      INNER JOIN Venta v ON v.IdVenta = lv.IdVenta
+      INNER JOIN GeneArti g ON CAST(g.IdArticu AS VARCHAR) = CAST(lv.Codigo AS VARCHAR)
+      WHERE (v.Ejercicio * 100 + v.Mes) >= ${cutoff}
+        AND ${fac.filtro} ${exclClause}
+        AND lv.Cantidad > 0
+        AND g.IdGrupoGen IS NOT NULL AND g.IdGrupoGen > 0
+      GROUP BY g.IdGrupoGen, lv.Codigo
+    ) t
+    WHERE rn = 1
+  `).catch(err => { log.warn('Top CN por grupo (auto-creación) falló:', err.message); return { recordset: [] }; });
+
+  const topPorCh          = new Map(topR.recordset.map(r => [Number(r.ch), Number(r.cn)]));
+  const categoriaPorCh    = new Map((categoriasActuales || []).map(r => [Number(r.ch), r.categoria]));
+  const listaIdPorCategoria = new Map(creadas.map(c => [c.categoria, c.lista_id]));
+
+  let favoritosCreados = 0;
+  for (const [ch, cn] of topPorCh) {
+    const listaId = listaIdPorCategoria.get(categoriaPorCh.get(ch));
+    if (!listaId) continue;
+    try {
+      await p.request()
+        .input('lista', sql.Int, listaId)
+        .input('cn',    sql.Int, cn)
+        .query(`
+          IF NOT EXISTS (SELECT 1 FROM ItemListaArticu WHERE XItem_IdLista = @lista AND XItem_IdArticu = @cn)
+          INSERT INTO ItemListaArticu (XItem_IdLista, XItem_IdArticu) VALUES (@lista, @cn)
+        `);
+      favoritosCreados++;
+    } catch (err) {
+      log.warn(`No se pudo sembrar favorito inicial de CH ${ch}:`, err.message);
+    }
+  }
+
+  log.info(`✓ Listas de categoría creadas en Farmatic: ${creadas.length}, favoritos iniciales: ${favoritosCreados}`);
+  return { creadas, favoritos_creados: favoritosCreados };
+}
+
 async function procesarCambiosPendientes(cambios) {
   if (!cambios || cambios.length === 0) return { procesados: 0, errores: 0, ids_procesados: [] };
   const listas = getCategoriaLista();
@@ -1121,6 +1233,8 @@ module.exports = {
   fetch4DBDescuentos,
   procesarCambiosPendientes,
   procesarListaNegraPendiente,
+  getCategoriaLista,
+  crearListasCategoriaYFavoritosIniciales,
   discoverSchema,
   discoverDataQuality,
   resetSchemaCache,

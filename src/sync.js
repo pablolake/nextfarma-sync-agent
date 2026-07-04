@@ -60,6 +60,7 @@ async function runSync(opts = {}) {
 
   // Track partial results to inform the user at the end
   const resultados = { ok: [], warn: [], error: [] };
+  let listasCreadas = null; // {categoria: nuevoId} si se crearon listas de categoría este ciclo
   const ok   = (msg) => { resultados.ok.push(msg);    log.info('✓ ' + msg); };
   const warn = (msg) => { resultados.warn.push(msg);  log.warn('⚠ ' + msg); };
   const err  = (msg) => { resultados.error.push(msg); log.error('✗ ' + msg); };
@@ -462,6 +463,32 @@ async function runSync(opts = {}) {
     log.warn('Lista Negra omitida:', e.message);
   }
 
+  // Auto-creación de listas de categoría cuando esta instalación no usa Listas de
+  // Farmatic para favoritos. Doble candado, por defecto todo apagado: solo corre si el
+  // tenant tiene farmatic_write_enabled Y farmatic_autocrear_listas activos en Railway
+  // (ver [[project_sync_electron]] — jose no la necesita y se queda desactivada como
+  // el resto hasta que se active a mano en algún tenant piloto), y solo si de verdad no
+  // hay ninguna lista real en Farmatic (si hubiera alguna sin mapear, no se toca nada).
+  try {
+    if (!farmatic.getCategoriaLista()) {
+      const cfgTenant = await api.obtenerConfigSync();
+      if (cfgTenant.farmatic_write_enabled && cfgTenant.farmatic_autocrear_listas) {
+        const listasExistentes = await farmatic.fetchListasWizard();
+        if (!listasExistentes || listasExistentes.length === 0) {
+          const categorias = await api.obtenerCategoriasActuales();
+          const resultado = await farmatic.crearListasCategoriaYFavoritosIniciales(categorias);
+          if (resultado?.creadas?.length) {
+            listasCreadas = Object.fromEntries(resultado.creadas.map(c => [c.categoria, c.lista_id]));
+            await api.reportarListasCreadas(resultado);
+            log.info(`✓ Listas de favoritos creadas en Farmatic: ${resultado.creadas.length}`);
+          }
+        }
+      }
+    }
+  } catch (e) {
+    log.warn('Auto-creación de listas omitida:', e.message);
+  }
+
   step('cronicos', 'Crónicos y encargos sincronizados', 'ok');
 
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
@@ -478,7 +505,7 @@ async function runSync(opts = {}) {
 
   await sendPing(resultados.error.length > 0 ? 'error' : resultados.warn.length > 0 ? 'warn' : 'ok', elapsed)
 
-  return { ...resultados, elapsed };
+  return { ...resultados, elapsed, listasCreadas };
 }
 
 async function syncEncargos() {
