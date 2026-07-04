@@ -84,7 +84,14 @@ async function runSync(opts = {}) {
   farmatic.resetSchemaCache();
   try {
     const schema = await farmatic.discoverSchema();
-    await api.enviarSchemaInfo(schema);
+    // Calidad de datos (filas totales + nulos por columna) es una consulta
+    // pesada — discoverDataQuality se autolimita a una vez al día y devuelve
+    // null el resto de ciclos, así que esto no ralentiza cada sync.
+    const calidad = await farmatic.discoverDataQuality(schema).catch(e => {
+      log.warn('discoverDataQuality omitido:', e.message);
+      return null;
+    });
+    await api.enviarSchemaInfo(calidad ? { ...schema, calidad } : schema);
   } catch (e) {
     log.warn('Barrido de esquema omitido:', e.message);
   }

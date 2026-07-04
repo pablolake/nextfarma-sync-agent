@@ -93,11 +93,11 @@ async function discoverSchema() {
     const existentes = new Set(tablasR.recordset.map(r => r.name));
     if (existentes.size > 0) {
       const colsR = await p.request().query(`
-        SELECT TABLE_NAME, COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+        SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS
         WHERE TABLE_NAME IN (${[...existentes].map(t => `'${t}'`).join(',')})
       `);
       for (const t of existentes) tablas[t] = [];
-      for (const row of colsR.recordset) tablas[row.TABLE_NAME].push(row.COLUMN_NAME);
+      for (const row of colsR.recordset) tablas[row.TABLE_NAME].push({ nombre: row.COLUMN_NAME, tipo: row.DATA_TYPE });
     }
 
     // BP_CONJARTI/BP_CONJUNTOS viven en la BD del Consejo, no en la de Farmatic.
@@ -107,11 +107,11 @@ async function discoverSchema() {
     const existentesConsejo = new Set(consejoR.recordset.map(r => r.name));
     if (existentesConsejo.size > 0) {
       const colsConsejoR = await p.request().query(`
-        SELECT TABLE_NAME, COLUMN_NAME FROM ${cdb}.INFORMATION_SCHEMA.COLUMNS
+        SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE FROM ${cdb}.INFORMATION_SCHEMA.COLUMNS
         WHERE TABLE_NAME IN (${[...existentesConsejo].map(t => `'${t}'`).join(',')})
       `).catch(() => ({ recordset: [] }));
       for (const t of existentesConsejo) tablas[t] = [];
-      for (const row of colsConsejoR.recordset) tablas[row.TABLE_NAME].push(row.COLUMN_NAME);
+      for (const row of colsConsejoR.recordset) tablas[row.TABLE_NAME].push({ nombre: row.COLUMN_NAME, tipo: row.DATA_TYPE });
     }
 
     const faltantes = TABLAS_ESPERADAS.filter(t => !tablas[t]);
@@ -124,6 +124,64 @@ async function discoverSchema() {
     schemaCache = { tablas: {}, tablas_esperadas_faltantes: TABLAS_ESPERADAS, error: err.message };
   }
   return schemaCache;
+}
+
+// ── Calidad de datos por tabla ────────────────────────────────────────────────
+// Cuenta filas totales y nulos por columna de las tablas ya descubiertas.
+// Nunca sale una fila real, solo números — pensado para detectar en remoto
+// instalaciones donde una columna clave viene vacía (el caso real que motivó
+// esto: dto_pct NULL en el 96% del catálogo de una farmacia) sin depender de
+// que alguien lo reporte. Es una consulta pesada (recorre cada tabla entera),
+// así que se limita a una vez al día por instalación, no en cada ciclo.
+function ultimaEjecucionPath() {
+  const dir = process.env.USERDATA_PATH || __dirname;
+  return path.join(dir, 'schema-calidad-last-run.json');
+}
+
+function yaCorrioHoy() {
+  try {
+    const raw = fs.readFileSync(ultimaEjecucionPath(), 'utf8');
+    const { fecha } = JSON.parse(raw);
+    return fecha === new Date().toISOString().slice(0, 10);
+  } catch {
+    return false;
+  }
+}
+
+function marcarEjecutadoHoy() {
+  try {
+    fs.writeFileSync(ultimaEjecucionPath(), JSON.stringify({ fecha: new Date().toISOString().slice(0, 10) }));
+  } catch { /* no crítico */ }
+}
+
+async function discoverDataQuality(schema) {
+  if (yaCorrioHoy()) return null;
+  const p = await getPool();
+  const cdb = CONSEJO_DB();
+  const calidad = {};
+
+  for (const [tabla, columnas] of Object.entries(schema.tablas || {})) {
+    if (!columnas.length) continue;
+    const esConsejo = tabla === 'BP_CONJARTI' || tabla === 'BP_CONJUNTOS';
+    const prefijo = esConsejo ? `${cdb}.dbo.` : '';
+    const nullExprs = columnas.map(c => `SUM(CASE WHEN [${c.nombre}] IS NULL THEN 1 ELSE 0 END) AS [${c.nombre}]`).join(',\n        ');
+    try {
+      const r = await p.request().query(`
+        SELECT COUNT(*) AS total_filas,
+        ${nullExprs}
+        FROM ${prefijo}[${tabla}]
+      `);
+      const row = r.recordset[0] || {};
+      calidad[tabla] = {
+        total_filas: row.total_filas || 0,
+        columnas: columnas.map(c => ({ nombre: c.nombre, tipo: c.tipo, nulos: row[c.nombre] || 0 })),
+      };
+    } catch (err) {
+      log.warn(`discoverDataQuality falló en ${tabla}:`, err.message);
+    }
+  }
+  marcarEjecutadoHoy();
+  return calidad;
 }
 
 function cargarDescuentosExcel() {
@@ -1028,6 +1086,7 @@ module.exports = {
   procesarCambiosPendientes,
   procesarListaNegraPendiente,
   discoverSchema,
+  discoverDataQuality,
   resetSchemaCache,
   fetchVendedoresWizard,
   fetchLabsWizard,
