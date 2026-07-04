@@ -618,10 +618,13 @@ async function fetch4DBDescuentos() {
 }
 
 // Lista IDs: configuradas por el wizard (paso Listas). Sin configurar → null (leer/escribir desactivado).
+// LIST_CONSOLIDADO es opcional (no todas las instalaciones de Farmatic distinguen esta
+// categoría en una lista propia — caso real: farmacia jose sí la tiene) — si falta, las
+// otras 6 categorías siguen funcionando igual; solo CONSOLIDADO no se lee/escribe.
 function getListaCategoria() {
   const keys = ['LIST_INCENTIVADOS_STAR','LIST_INCENTIVADOS','LIST_MAX_ROT_A','LIST_MAX_ROT_B','LIST_RESTO','LIST_PARADOS'];
   if (keys.some(k => !process.env[k])) return null;
-  return {
+  const map = {
     [parseInt(process.env.LIST_INCENTIVADOS_STAR)]: 'INCENTIVADOS_STAR',
     [parseInt(process.env.LIST_INCENTIVADOS)]:       'INCENTIVADOS',
     [parseInt(process.env.LIST_MAX_ROT_A)]:          'MAX_ROTACION_A',
@@ -629,6 +632,8 @@ function getListaCategoria() {
     [parseInt(process.env.LIST_RESTO)]:              'RESTO',
     [parseInt(process.env.LIST_PARADOS)]:            'PARADOS',
   };
+  if (process.env.LIST_CONSOLIDADO) map[parseInt(process.env.LIST_CONSOLIDADO)] = 'CONSOLIDADO';
+  return map;
 }
 
 async function fetchFavoritosListas() {
@@ -753,7 +758,7 @@ async function fetchVendedoresFarmatic() {
 function getCategoriaLista() {
   const keys = ['LIST_INCENTIVADOS_STAR','LIST_INCENTIVADOS','LIST_MAX_ROT_A','LIST_MAX_ROT_B','LIST_RESTO','LIST_PARADOS'];
   if (keys.some(k => !process.env[k])) return null;
-  return {
+  const map = {
     'INCENTIVADOS_STAR': parseInt(process.env.LIST_INCENTIVADOS_STAR),
     'INCENTIVADOS':      parseInt(process.env.LIST_INCENTIVADOS),
     'MAX_ROTACION_A':    parseInt(process.env.LIST_MAX_ROT_A),
@@ -761,6 +766,8 @@ function getCategoriaLista() {
     'RESTO':             parseInt(process.env.LIST_RESTO),
     'PARADOS':           parseInt(process.env.LIST_PARADOS),
   };
+  if (process.env.LIST_CONSOLIDADO) map['CONSOLIDADO'] = parseInt(process.env.LIST_CONSOLIDADO);
+  return map;
 }
 
 async function procesarCambiosPendientes(cambios) {

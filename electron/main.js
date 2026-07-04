@@ -55,6 +55,7 @@ function applyConfig(cfg) {
   if (w.listMaxRotB)                 process.env.LIST_MAX_ROT_B         = String(w.listMaxRotB);
   if (w.listResto)                   process.env.LIST_RESTO             = String(w.listResto);
   if (w.listParados)                 process.env.LIST_PARADOS           = String(w.listParados);
+  if (w.listConsolidado)             process.env.LIST_CONSOLIDADO       = String(w.listConsolidado);
   if (w.listNegra)                   process.env.LIST_NEGRA             = String(w.listNegra);
   if (w.scUmbral)                    process.env.SC_UMBRAL              = String(w.scUmbral);
   if (w.opcRGPD)                     process.env.RGPD_OPCION            = String(w.opcRGPD);

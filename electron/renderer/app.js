@@ -15,7 +15,7 @@ const wz = {
   opcRGPD: 31,
   scUmbral: 2500, scCN: 5, scKT: 10,
   lists: [],            // all lists from Farmatic
-  listStar: null, listInc: null, listMrotA: null, listMrotB: null, listResto: null, listPar: null, listNegra: null,
+  listStar: null, listInc: null, listMrotA: null, listMrotB: null, listResto: null, listPar: null, listConsolidado: null, listNegra: null,
 };
 
 /* ── Init ───────────────────────────────────────────────────────────── */
@@ -637,9 +637,10 @@ async function wizardLoadLists() {
     ['wz-list-inc',   'listIncentivados',    102],
     ['wz-list-mrota', 'listMaxRotA',         103],
     ['wz-list-mrotb', 'listMaxRotB',         104],
-    ['wz-list-resto', 'listResto',           105],
-    ['wz-list-par',   'listParados',         106],
-    ['wz-list-negra', 'listNegra',           null],
+    ['wz-list-resto',       'listResto',       105],
+    ['wz-list-par',         'listParados',     106],
+    ['wz-list-consolidado', 'listConsolidado', null],
+    ['wz-list-negra',       'listNegra',       null],
   ];
   for (const [selId, key, def] of fields) {
     const sel = document.getElementById(selId);
@@ -656,9 +657,10 @@ function wizardCollectLists() {
   wz.listInc   = parseInt(document.getElementById('wz-list-inc').value)   || null;
   wz.listMrotA = parseInt(document.getElementById('wz-list-mrota').value) || null;
   wz.listMrotB = parseInt(document.getElementById('wz-list-mrotb').value) || null;
-  wz.listResto = parseInt(document.getElementById('wz-list-resto').value) || null;
-  wz.listPar   = parseInt(document.getElementById('wz-list-par').value)   || null;
-  wz.listNegra = parseInt(document.getElementById('wz-list-negra').value) || null;
+  wz.listResto       = parseInt(document.getElementById('wz-list-resto').value)       || null;
+  wz.listPar         = parseInt(document.getElementById('wz-list-par').value)         || null;
+  wz.listConsolidado = parseInt(document.getElementById('wz-list-consolidado').value) || null;
+  wz.listNegra       = parseInt(document.getElementById('wz-list-negra').value)       || null;
 }
 
 async function wizardDiag(step, key, label) {
@@ -737,6 +739,7 @@ function renderWizardSummary() {
     'MÁX. ROT. B':       wz.listMrotB,
     'RESTO':             wz.listResto,
     'PARADOS':           wz.listPar,
+    'CONSOLIDADO':       wz.listConsolidado,
   };
   const listLines = Object.entries(listMap)
     .filter(([, v]) => v)
@@ -789,6 +792,7 @@ async function wizardFinish() {
     listMaxRotB:          wz.listMrotB,
     listResto:            wz.listResto,
     listParados:          wz.listPar,
+    listConsolidado:      wz.listConsolidado,
     listNegra:            wz.listNegra,
   };
 
