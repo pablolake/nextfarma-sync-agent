@@ -263,4 +263,60 @@ async function syncCronicosClientes(apiClient, log) {
   }
 }
 
-module.exports = { syncCronicos, syncCronicosClientes };
+// Fallback SOLO agregado (sin id_farmatic, sin nombre, sin teléfono) para que
+// el módulo Clientes muestre una visión general aunque todavía nadie haya
+// dado el consentimiento RGPD individual — se calcula sobre todos_clientes,
+// que ya es 100% local y sin datos personales (ver syncCronicos arriba).
+// Usa los mismos umbrales por defecto que la segmentación real
+// (CLIENTES_CONFIG_DEFAULT en nextfarma-api); si la farmacia los ha
+// personalizado, este resumen se queda con los valores por defecto hasta que
+// haya clientes consentidos reales.
+async function syncClientesResumen(apiClient, log) {
+  const Database = require('better-sqlite3');
+  const dbPath = process.env.USERDATA_PATH
+    ? require('path').join(process.env.USERDATA_PATH, 'cronicos.db')
+    : require('path').join(__dirname, 'cronicos.db');
+
+  let db;
+  try {
+    db = new Database(dbPath, { readonly: true });
+  } catch {
+    log.warn('syncClientesResumen: cronicos.db no encontrada, omitido');
+    return;
+  }
+
+  try {
+    const rows = db.prepare('SELECT dias_ausencia, total_tickets, importe_total FROM todos_clientes').all();
+    if (!rows.length) {
+      log.info('Clientes resumen: sin datos de todos_clientes');
+      return;
+    }
+
+    const VIP_MIN = 15, FIEL_MIN = 8, RIESGO_DIAS = 60, INACTIVO_DIAS = 180;
+    const n = { vip: 0, fiel: 0, ocasional: 0, riesgo: 0, inactivo: 0 };
+    const valor = { vip: 0, fiel: 0, ocasional: 0, riesgo: 0, inactivo: 0 };
+    for (const r of rows) {
+      const dias = r.dias_ausencia || 0, tickets = r.total_tickets || 0, importe = r.importe_total || 0;
+      let seg;
+      if (dias >= INACTIVO_DIAS) seg = 'inactivo';
+      else if (dias >= RIESGO_DIAS) seg = 'riesgo';
+      else if (tickets >= VIP_MIN) seg = 'vip';
+      else if (tickets >= FIEL_MIN) seg = 'fiel';
+      else seg = 'ocasional';
+      n[seg]++; valor[seg] += importe;
+    }
+    const segmentos = Object.keys(n).map(seg => ({ segmento: seg, n: n[seg], valor: +valor[seg].toFixed(2) }));
+
+    await apiClient.request('/api/sync/clientes-resumen', {
+      method: 'POST',
+      body: { segmentos, total_clientes: rows.length },
+    });
+    log.info(`✓ Clientes resumen: ${rows.length} clientes agregados (sin datos personales)`);
+  } catch (err) {
+    log.warn('syncClientesResumen omitido:', err.message);
+  } finally {
+    db.close();
+  }
+}
+
+module.exports = { syncCronicos, syncCronicosClientes, syncClientesResumen };
