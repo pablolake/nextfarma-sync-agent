@@ -71,9 +71,13 @@ const DESCUENTOS_DIR = () => process.env.DESCUENTOS_DIR || path.join(process.env
 // principio de cada sync sobre las tablas que el agente usa, y se manda a
 // NextFarma para poder diagnosticar instalaciones concretas sin depender de
 // que la farmacia pegue logs.
+// 'Lista'/'Listas' NO están aquí a propósito: no existen como nombre de tabla real en
+// ninguna instalación de Farmatic vista hasta ahora (la tabla de cabeceras de listas se
+// llama ListaArticu, ya incluida) — tenerlas en la lista solo generaba un falso "tabla
+// esperada faltante" en todas las farmacias, sin ser un problema real.
 const TABLAS_ESPERADAS = [
   'Articu', 'GeneArti', 'LineaVenta', 'Venta', 'Vendedor', 'Cliente', 'ClienteRGPD',
-  'Recep', 'LineaRecep', 'ListaArticu', 'Lista', 'Listas', 'ItemListaArticu',
+  'Recep', 'LineaRecep', 'ListaArticu', 'ItemListaArticu',
   '_4DB_CAT_CatalogoArt', '_4DB_CAT_Models',
 ];
 
@@ -1070,6 +1074,21 @@ async function fetchRGPDCount(opcion) {
   return Number(r.recordset[0]?.n ?? 0);
 }
 
+// Distribución de códigos OpcRGPD (solo código + nº de clientes, sin id/nombre/teléfono)
+// para poder detectar en remoto si el código configurado en el asistente no coincide con
+// ningún código real de esta instalación de Farmatic — sin depender de un clic manual local.
+async function fetchRGPDDistribucion() {
+  try {
+    const p = await getPool();
+    const r = await p.request().query(
+      `SELECT OpcRGPD AS opcion, COUNT(*) AS n FROM ClienteRGPD GROUP BY OpcRGPD ORDER BY n DESC`
+    );
+    return r.recordset.map(row => ({ opcion: row.opcion, n: Number(row.n) }));
+  } catch (e) {
+    return null;
+  }
+}
+
 module.exports = {
   getPool,
   closePool,
@@ -1092,6 +1111,7 @@ module.exports = {
   fetchLabsWizard,
   fetchListasWizard,
   fetchRGPDCount,
+  fetchRGPDDistribucion,
   runDiagnostic,
   IVA_MEDICAMENTOS,
   RE,

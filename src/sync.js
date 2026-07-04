@@ -91,7 +91,26 @@ async function runSync(opts = {}) {
       log.warn('discoverDataQuality omitido:', e.message);
       return null;
     });
-    await api.enviarSchemaInfo(calidad ? { ...schema, calidad } : schema);
+    // Distribución de códigos OpcRGPD + el código que este agente tiene configurado como
+    // "consentimiento firmado" — permite ver desde Railway si están desalineados sin pedirle
+    // a la farmacia que pulse el botón de verificación del asistente.
+    const rgpdDistribucion = await farmatic.fetchRGPDDistribucion();
+    const rgpd = rgpdDistribucion
+      ? { opcion_configurada: parseInt(process.env.RGPD_OPCION, 10) || 31, distribucion: rgpdDistribucion }
+      : null;
+    // Listas de artículos reales (id + nombre + nº de ítems) — permite ver desde Railway
+    // qué listas usa esta farmacia y con cuántos artículos, sin depender de que el wizard
+    // de Listas se haya rellenado ni de preguntarle a la farmacia cómo organiza sus favoritos.
+    const listasFarmatic = await farmatic.fetchListasWizard().catch(e => {
+      log.warn('fetchListasWizard (diagnóstico) omitido:', e.message);
+      return null;
+    });
+    await api.enviarSchemaInfo({
+      ...schema,
+      ...(calidad ? { calidad } : {}),
+      ...(rgpd ? { rgpd } : {}),
+      ...(listasFarmatic ? { listas: listasFarmatic } : {}),
+    });
   } catch (e) {
     log.warn('Barrido de esquema omitido:', e.message);
   }
