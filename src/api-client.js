@@ -148,6 +148,28 @@ async function marcarListaNegraProcesada(tenantId, ids) {
   });
 }
 
+// Empleados nuevos creados desde NextFarma que aún no existen en Farmatic — a
+// diferencia de cambios-pendientes/lista-negra-pendiente (rutas /api/:tenantId/...),
+// estas van bajo /api/sync/... desde el principio, ya autenticadas por X-API-Key sin
+// depender de ningún caso especial en authGate.
+async function getVendedoresPendientes() {
+  try {
+    return await request('/api/sync/vendedores-pendientes');
+  } catch (err) {
+    log.warn('getVendedoresPendientes falló:', err.message);
+    return { pendientes: [] };
+  }
+}
+
+async function marcarVendedoresPendientesProcesados(resultados) {
+  try {
+    return await request('/api/sync/vendedores-pendientes/procesar', { method: 'POST', body: { resultados } });
+  } catch (err) {
+    log.warn('marcarVendedoresPendientesProcesados falló:', err.message);
+    return { ok: false };
+  }
+}
+
 // Flags remotas del tenant: si se puede escribir en Farmatic y si está activada la
 // auto-creación de listas de categoría cuando no existe ninguna (ver farmatic-client.js).
 async function obtenerConfigSync() {
@@ -252,6 +274,8 @@ module.exports = {
   // fallaba en silencio (atrapado por el try/catch de "Lista Negra omitida").
   getListaNegraPendiente,
   marcarListaNegraProcesada,
+  getVendedoresPendientes,
+  marcarVendedoresPendientesProcesados,
   enviarSchemaInfo,
   obtenerConfigSync,
   obtenerCategoriasActuales,

@@ -493,6 +493,19 @@ async function runSync(opts = {}) {
     log.warn('Lista Negra omitida:', e.message);
   }
 
+  try {
+    const { pendientes } = await api.getVendedoresPendientes();
+    if (pendientes && pendientes.length > 0) {
+      log.info('Empleados nuevos: ' + pendientes.length + ' a dar de alta en Farmatic');
+      const resultados = await farmatic.procesarVendedoresPendientes(pendientes);
+      await api.marcarVendedoresPendientesProcesados(resultados);
+      const ok = resultados.filter(r => r.ok).length;
+      log.info(`Empleados nuevos: ${ok} OK, ${resultados.length - ok} errores`);
+    }
+  } catch (e) {
+    log.warn('Alta de empleados nuevos omitida:', e.message);
+  }
+
   // Auto-creación de listas de categoría cuando esta instalación no usa Listas de
   // Farmatic para favoritos. Doble candado, por defecto todo apagado: solo corre si el
   // tenant tiene farmatic_write_enabled Y farmatic_autocrear_listas activos en Railway

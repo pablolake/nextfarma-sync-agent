@@ -893,6 +893,72 @@ async function fetchVendedoresFarmatic() {
   return result.recordset;
 }
 
+// Da de alta en Farmatic (tabla Vendedor) a un empleado creado desde NextFarma que
+// todavía no existía allí. Mismo criterio defensivo que
+// crearListasCategoriaYFavoritosIniciales(): si IdVendedor no es autonumérico, no se
+// adivina un id a mano — se aborta ese alta concreta y se reporta como error (queda
+// visible para el titular, no se pierde en silencio). El nombre de columna se resuelve
+// con el mismo mapeo persistente que el resto del esquema; los apellidos por separado
+// solo se usan si esa instalación los tiene — si no, se concatenan en el único campo de
+// nombre disponible (caso real: farmacia jose solo tiene NOMBRE, sin Apellido1/2).
+async function procesarVendedoresPendientes(pendientes) {
+  const p = await getPool();
+  const resultados = [];
+  if (!pendientes || !pendientes.length) return resultados;
+
+  const identityR = await p.request().query(
+    `SELECT COLUMNPROPERTY(OBJECT_ID('Vendedor'), 'IdVendedor', 'IsIdentity') AS es_identity`
+  ).catch(() => ({ recordset: [] }));
+  const esIdentity = identityR.recordset[0]?.es_identity === 1;
+
+  const colsR = await p.request().query(
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Vendedor'`
+  ).catch(() => ({ recordset: [] }));
+  const colsVendedor = new Set(colsR.recordset.map(r => String(r.COLUMN_NAME)));
+
+  const colNombre = await resolverAtributoColumna({
+    entidad: 'VENDEDOR', atributo: 'nombre', candidatos: ['Nombre', 'NOMBRE'],
+    columnasReales: colsVendedor, descripcion: 'Columna de la tabla Vendedor con el nombre completo del empleado.',
+  });
+  const colApellido1 = await resolverAtributoColumna({
+    entidad: 'VENDEDOR', atributo: 'apellido1', candidatos: ['Apellido1', 'APELLIDO1'],
+    columnasReales: colsVendedor, descripcion: 'Columna de la tabla Vendedor con el primer apellido, si existe por separado del nombre.',
+  });
+  const colApellido2 = await resolverAtributoColumna({
+    entidad: 'VENDEDOR', atributo: 'apellido2', candidatos: ['Apellido2', 'APELLIDO2'],
+    columnasReales: colsVendedor, descripcion: 'Columna de la tabla Vendedor con el segundo apellido, si existe por separado del nombre.',
+  });
+
+  if (!esIdentity || !colNombre) {
+    const motivo = !esIdentity
+      ? 'Vendedor.IdVendedor no es autonumérico — no se puede generar un id seguro'
+      : 'No se encontró ninguna columna de nombre reconocible en Vendedor';
+    log.warn('Alta de vendedores omitida: ' + motivo);
+    return pendientes.map(v => ({ id: v.id, ok: false, error: motivo }));
+  }
+
+  for (const v of pendientes) {
+    try {
+      const nombreCompleto = [v.nombre, v.apellido1, v.apellido2].filter(Boolean).join(' ');
+      const req = p.request();
+      const cols = [colNombre], placeholders = ['@nombre'];
+      req.input('nombre', sql.VarChar, (colApellido1 || colApellido2) ? v.nombre : nombreCompleto);
+      if (colApellido1) { cols.push(colApellido1); placeholders.push('@apellido1'); req.input('apellido1', sql.VarChar, v.apellido1 || ''); }
+      if (colApellido2) { cols.push(colApellido2); placeholders.push('@apellido2'); req.input('apellido2', sql.VarChar, v.apellido2 || ''); }
+      const r = await req.query(
+        `INSERT INTO Vendedor (${cols.join(', ')}) OUTPUT INSERTED.IdVendedor AS id VALUES (${placeholders.join(', ')})`
+      );
+      const nuevoId = r.recordset[0]?.id;
+      log.info(`✓ Vendedor creado en Farmatic: ${nombreCompleto} (id ${nuevoId})`);
+      resultados.push({ id: v.id, ok: true, vendedor_id_asignado: nuevoId });
+    } catch (e) {
+      log.warn(`Alta de vendedor "${v.nombre}" falló:`, e.message);
+      resultados.push({ id: v.id, ok: false, error: e.message });
+    }
+  }
+  return resultados;
+}
+
 // Categoría → lista ID (para escribir favoritos en Farmatic). Mismo criterio permisivo
 // que getListaCategoria(): cada categoría configurada se escribe, las que falten se
 // omiten individualmente (procesarCambiosPendientes ya loguea "categoría desconocida"
@@ -1364,6 +1430,7 @@ module.exports = {
   fetchFavoritosActuales,
   fetchTicketMedio,
   fetchVendedoresFarmatic,
+  procesarVendedoresPendientes,
   verificarTablas,
   fetch4DBDescuentos,
   procesarCambiosPendientes,
