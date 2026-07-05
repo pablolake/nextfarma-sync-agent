@@ -617,6 +617,40 @@ async function fetch4DBDescuentos() {
   })).filter(r => /^\d{5,}$/.test(r.codigo_nacional));
 }
 
+// Nombres de lista conocidos por categoría — caso real: farmacia jose ya tenía sus listas
+// llamadas literalmente "INCENTIVADOS", "INCENTIVADOS ESTRELLA", "MAX ROTACION A/B",
+// "RESTO" y "PARADOS", así que se detectan solas sin tocar el asistente. Si otra
+// instalación usa nombres distintos, ningún patrón encuentra nada — no rompe nada, solo
+// significa que hay que rellenar el asistente a mano como hasta ahora. Exactos (con ^…$)
+// donde hay riesgo de falso positivo por substring (p.ej. "INCENTIVADOS" no debe
+// confundirse con "INCENTIVADOS ESTRELLA", ni "RESTO" con "RESTO DESCUENTO").
+const PATRONES_NOMBRE_LISTA = [
+  ['LIST_INCENTIVADOS_STAR', [/estrella/i]],
+  ['LIST_INCENTIVADOS',      [/^incentivados?$/i]],
+  ['LIST_MAX_ROT_A',         [/rotaci[oó]n\s*a\b/i]],
+  ['LIST_MAX_ROT_B',         [/rotaci[oó]n\s*b\b/i]],
+  ['LIST_RESTO',             [/^resto$/i]],
+  ['LIST_PARADOS',           [/^parados?$/i]],
+  ['LIST_CONSOLIDADO',       [/^consolidados?$/i]],
+];
+
+// Detecta por nombre qué lista de Farmatic corresponde a cada categoría, para no depender
+// de que alguien rellene el asistente a mano cuando la farmacia ya usa nombres
+// reconocibles. Nunca pisa una env var que ya esté puesta (manual o de una detección
+// anterior) — solo rellena huecos. `listas` es la salida de fetchListasWizard()
+// (id/nombre/n_items), la misma que ya se manda en el diagnóstico de cada sync.
+function detectarListasPorNombre(listas) {
+  const detectado = {};
+  for (const [envKey, patrones] of PATRONES_NOMBRE_LISTA) {
+    const encontrada = (listas || []).find(l => {
+      const nombre = String(l.nombre || '').trim();
+      return patrones.some(p => p.test(nombre));
+    });
+    if (encontrada) detectado[envKey] = encontrada.id;
+  }
+  return detectado;
+}
+
 // Las 7 categorías y su env var — cada una es independiente. Antes exigíamos las 6
 // principales completas o no se leía/escribía nada; eso hacía que, si una farmacia real
 // no distinguía o no mapeaba bien una sola categoría (nombres de lista distintos a los
@@ -1228,6 +1262,7 @@ module.exports = {
   procesarCambiosPendientes,
   procesarListaNegraPendiente,
   getCategoriaLista,
+  detectarListasPorNombre,
   crearListasCategoriaYFavoritosIniciales,
   discoverSchema,
   discoverDataQuality,
