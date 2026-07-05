@@ -522,7 +522,11 @@ async function runSync(opts = {}) {
           const resultado = await farmatic.crearListasCategoriaYFavoritosIniciales(categorias);
           if (resultado?.creadas?.length) {
             listasCreadas = Object.fromEntries(resultado.creadas.map(c => [c.categoria, c.lista_id]));
-            await api.reportarListasCreadas(resultado);
+            // El backend espera { listas, favoritos_creados } — crearListasCategoriaYFavoritosIniciales()
+            // devuelve { creadas, favoritos_creados }. Antes se mandaba el objeto tal cual y el
+            // backend siempre respondía 400 "listas[] requerido": la alerta al titular nunca se
+            // llegó a crear. Detectado en la primera prueba real de este flujo contra Docker.
+            await api.reportarListasCreadas({ listas: resultado.creadas, favoritos_creados: resultado.favoritos_creados });
             log.info(`✓ Listas de favoritos creadas en Farmatic: ${resultado.creadas.length}`);
           }
         }
