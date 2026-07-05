@@ -38,6 +38,7 @@
       "!node_modules/.cache/**"
     ],
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         {
           "target": "nsis",
@@ -49,6 +50,7 @@
       "artifactName": "NextFarma-Sync-Setup.${ext}"
     },
     "mac": {
+      "icon": "build/icon.icns",
       "target": [
         {
           "target": "dmg",
