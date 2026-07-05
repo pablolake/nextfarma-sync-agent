@@ -1091,41 +1091,55 @@ async function procesarCambiosPendientes(cambios) {
     try {
       const { ch, favorito_cn_nuevo, favorito_cn_anterior, categoria_nueva } = cambio;
 
-      if (favorito_cn_nuevo && categoria_nueva) {
-        const listaDestino = listas[categoria_nueva];
-        if (!listaDestino) {
-          log.warn('Categoria desconocida: ' + categoria_nueva);
-          errores++;
-          continue;
-        }
-
-        const listaIds = Object.values(listas).join(',');
-
-        if (favorito_cn_anterior) {
-          await p.request()
-            .input('cn', sql.Int, favorito_cn_anterior)
-            .query(`
-              DELETE FROM ItemListaArticu
-              WHERE XItem_IdArticu = @cn
-                AND XItem_IdLista IN (${listaIds})
-            `);
-        }
-
-        await p.request()
-          .input('lista', sql.Int, listaDestino)
-          .input('cn',    sql.Int, favorito_cn_nuevo)
-          .query(`
-            IF NOT EXISTS (
-              SELECT 1 FROM ItemListaArticu
-              WHERE XItem_IdLista = @lista AND XItem_IdArticu = @cn
-            )
-            INSERT INTO ItemListaArticu (XItem_IdLista, XItem_IdArticu)
-            VALUES (@lista, @cn)
-          `);
-
-        log.info(`Cambio procesado: CH ${ch} CN ${favorito_cn_nuevo} lista ${listaDestino} (${categoria_nueva})`);
+      // El backend ya rellena categoria_nueva con la categoría actual del GH aunque solo
+      // cambie el favorito (no la categoría) — si aun así llega sin ella (agente viejo
+      // hablando con backend nuevo, o dato incompleto), no hay lista de destino segura:
+      // se marca como error explícito en vez de darlo por bueno sin escribir nada, que
+      // es justo el bug que hizo que un cambio de favorito real se reportara "OK" sin
+      // tocar Farmatic.
+      if (!favorito_cn_nuevo) {
+        procesados++;
+        ids_procesados.push(cambio.id);
+        continue;
+      }
+      if (!categoria_nueva) {
+        log.warn(`Cambio CH ${ch} sin categoría de destino — no se puede escribir en Farmatic con seguridad`);
+        errores++;
+        continue;
       }
 
+      const listaDestino = listas[categoria_nueva];
+      if (!listaDestino) {
+        log.warn('Categoria desconocida: ' + categoria_nueva);
+        errores++;
+        continue;
+      }
+
+      const listaIds = Object.values(listas).join(',');
+
+      if (favorito_cn_anterior) {
+        await p.request()
+          .input('cn', sql.Int, favorito_cn_anterior)
+          .query(`
+            DELETE FROM ItemListaArticu
+            WHERE XItem_IdArticu = @cn
+              AND XItem_IdLista IN (${listaIds})
+          `);
+      }
+
+      await p.request()
+        .input('lista', sql.Int, listaDestino)
+        .input('cn',    sql.Int, favorito_cn_nuevo)
+        .query(`
+          IF NOT EXISTS (
+            SELECT 1 FROM ItemListaArticu
+            WHERE XItem_IdLista = @lista AND XItem_IdArticu = @cn
+          )
+          INSERT INTO ItemListaArticu (XItem_IdLista, XItem_IdArticu)
+          VALUES (@lista, @cn)
+        `);
+
+      log.info(`Cambio procesado: CH ${ch} CN ${favorito_cn_nuevo} lista ${listaDestino} (${categoria_nueva})`);
       procesados++;
       ids_procesados.push(cambio.id);
     } catch (err) {
