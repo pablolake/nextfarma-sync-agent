@@ -441,15 +441,17 @@ ORDER  BY name</pre>
         <div class="wpage-title">Paso 4 de 6 — Consentimiento RGPD (Crónicos)</div>
         <p class="wpage-desc">
           El módulo de crónicos lee los pacientes con consentimiento RGPD activo.
-          El código estándar en Farmatic es <strong>31</strong>, pero puede variar.
-          Pulsa "Verificar" para confirmarlo contra tu base de datos.
+          Cada Farmatic puede usar un código distinto — abajo tienes todos los códigos
+          reales de tu base de datos con cuántos clientes tiene cada uno, para elegir con
+          seguridad en vez de confiar en un valor por defecto.
         </p>
         <div class="wdiag-panel" id="wdiag-3" style="margin-bottom:10px">
           <button class="wdiag-toggle" onclick="wizardDiag(3,'rgpd_opciones','Ver todos los códigos RGPD')">
-            ¿No sabes qué código usar? — Ver todos los códigos presentes en Farmatic
+            Códigos RGPD presentes en tu Farmatic
           </button>
           <div class="wdiag-body" id="wdiag-body-3" style="display:none"></div>
         </div>
+        <div id="w3-rgpd-warning" style="display:none;margin-bottom:10px;padding:8px 10px;border-radius:4px;background:rgba(227,150,74,0.12);color:#e3964a;font-size:12px"></div>
         <div id="w3-form">
           <div class="wlab-row" style="margin-top:8px">
             <span class="wlab-name">Código OpcRGPD</span>

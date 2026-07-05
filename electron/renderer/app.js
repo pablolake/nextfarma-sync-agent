@@ -13,6 +13,7 @@ const wz = {
   labs: [],             // all lab codes from Farmatic
   labCinfa: '', labNormon: '', labKern: '', labTeva: '', labSecundarios: '',
   opcRGPD: 31,
+  rgpdCargado: false,   // evita recargar/repreguntar a Farmatic cada vez que se reabre el paso
   scUmbral: 2500, scCN: 5, scKT: 10,
   lists: [],            // all lists from Farmatic
   listStar: null, listInc: null, listMrotA: null, listMrotB: null, listResto: null, listPar: null, listConsolidado: null, listNegra: null,
@@ -494,6 +495,7 @@ async function wizardNext(step) {
   if (step === 0 && wz.vendors.length === 0) await wizardLoadVendors();
   if (step === 1 && wz.labs.length === 0)    await wizardLoadLabs();
   if (step === 2 && wz.lists.length === 0)   await wizardLoadLists();
+  if (step === 3 && !wz.rgpdCargado)         await wizardLoadRGPD();
   if (step === 5) renderWizardSummary();
 }
 
@@ -740,6 +742,60 @@ async function wizardDiag(step, key, label) {
   body.innerHTML = `
     <div class="wdiag-status">${escapeHtml(res.desc)} — ${res.rows.length} fila${res.rows.length !== 1 ? 's' : ''}</div>
     <div style="overflow-x:auto"><table class="wdiag-table"><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>`;
+}
+
+async function wizardLoadRGPD() {
+  wz.rgpdCargado = true;
+  const cfg = await window.sync.loadConfig();
+  const saved = cfg.wizard || {};
+  const opcion = saved.opcRGPD || 31;
+  wz.opcRGPD = opcion;
+  document.getElementById('wz-rgpd-opcion').value = opcion;
+
+  // Antes esta tabla estaba colapsada por defecto — un titular que confiara en "el
+  // estándar es 31" nunca la abría y podía guardar un código con muy pocos clientes
+  // reales sin enterarse de que había otro código con muchos más (caso real: farmacia
+  // jose, código 31 con 1 cliente, código 0 con 68). Se muestra siempre, sin clic.
+  const btn  = document.querySelector('#wdiag-3 .wdiag-toggle');
+  const body = document.getElementById('wdiag-body-3');
+  const warn = document.getElementById('w3-rgpd-warning');
+  if (warn) warn.style.display = 'none';
+  body.style.display = '';
+  btn?.classList.add('open');
+  body.innerHTML = `<div class="wdiag-status">Consultando Farmatic…</div>`;
+
+  const res = await window.sync.wizardRunDiagnostic('rgpd_opciones');
+  if (!res.ok) {
+    body.innerHTML = `<div class="wdiag-status" style="color:#f85149">✗ ${escapeHtml(res.error)}</div>`;
+    return;
+  }
+  if (!res.rows || !res.rows.length) {
+    body.innerHTML = `<div class="wdiag-status">Sin resultados para esta consulta.</div>`;
+    return;
+  }
+  const cols = Object.keys(res.rows[0]);
+  const thead = `<tr>${cols.map(c => `<th>${escapeHtml(c)}</th>`).join('')}</tr>`;
+  const tbody = res.rows.map(row =>
+    `<tr>${cols.map(c => `<td>${escapeHtml(String(row[c] ?? ''))}</td>`).join('')}</tr>`
+  ).join('');
+  body.innerHTML = `
+    <div class="wdiag-status">${res.rows.length} código${res.rows.length !== 1 ? 's' : ''} encontrados, ordenados por nº de clientes</div>
+    <div style="overflow-x:auto"><table class="wdiag-table"><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>`;
+
+  // Aviso, no corrección automática: cambiar el código de consentimiento a ciegas puede
+  // hacer que se contacte a clientes que nunca dieron su consentimiento real — solo
+  // quien conoce la configuración de Farmatic de esta farmacia puede confirmarlo.
+  if (!warn) return;
+  const filaConfigurada = res.rows.find(r => Number(r.opcion) === opcion);
+  const nConfigurada = Number(filaConfigurada?.n_clientes ?? 0);
+  const top = res.rows[0]; // la query ya viene ordenada DESC por n_clientes
+  const nTop = Number(top?.n_clientes ?? 0);
+  if (top && Number(top.opcion) !== opcion && nTop >= 5 && nTop >= nConfigurada * 3) {
+    warn.style.display = '';
+    warn.innerHTML = `⚠ El código configurado (${opcion}) solo tiene ${nConfigurada} cliente${nConfigurada !== 1 ? 's' : ''}, ` +
+      `pero el código ${top.opcion} tiene ${nTop}. Confirma en Farmatic cuál es realmente el código de consentimiento ` +
+      `antes de continuar — no se cambia automáticamente porque afecta a quién se contacta.`;
+  }
 }
 
 function wizardCollectRGPD() {
