@@ -178,6 +178,42 @@ async function reportarListasCreadas(payload) {
   }
 }
 
+// Mapeo de esquema Farmatic ya resuelto para este tenant (columnas/tablas reales por
+// entidad.atributo) — se carga una vez al arrancar cada sync y se usa como memoria: lo
+// ya resuelto no se vuelve a interpretar (ver resolverAtributoColumna en farmatic-client.js).
+async function obtenerMapeoEsquema() {
+  try {
+    const r = await request('/api/sync/mapeo-esquema');
+    return r.mapeo || {};
+  } catch (err) {
+    log.warn('obtenerMapeoEsquema falló:', err.message);
+    return {};
+  }
+}
+
+// La heurística local encontró un candidato válido — se persiste tal cual (gratis,
+// determinista, sin pasar por IA) para que el próximo sync ya lo tenga resuelto.
+async function reportarMapeoResuelto(entidad, atributo, valor_resuelto, confianza) {
+  try {
+    return await request('/api/sync/mapeo-resuelto', { method: 'POST', body: { entidad, atributo, valor_resuelto, confianza } });
+  } catch (err) {
+    log.warn('reportarMapeoResuelto falló:', err.message);
+    return { ok: false };
+  }
+}
+
+// La heurística local no encontró nada — se le pide a la IA que decida entre las
+// columnas/tablas reales de esta instalación. El backend decide si la confianza basta
+// para aplicarla sola o si se marca como error para el panel de admin.
+async function resolverConIA(entidad, atributo, descripcion, candidatos) {
+  try {
+    return await request('/api/sync/mapeo-ia', { method: 'POST', body: { entidad, atributo, descripcion, candidatos } });
+  } catch (err) {
+    log.warn('resolverConIA falló:', err.message);
+    return { ok: false, aplicar: false };
+  }
+}
+
 // Avisa al SaaS de que hay categorías de favoritos configuradas solo a medias, para que
 // el titular vea un aviso y termine el asistente. El backend hace el dedup (no repite
 // el aviso mientras el anterior siga sin leer), así que aquí solo se reporta sin más.
@@ -222,6 +258,9 @@ module.exports = {
   reportarListasCreadas,
   reportarCategoriasSinResolver,
   sugerirListas,
+  obtenerMapeoEsquema,
+  reportarMapeoResuelto,
+  resolverConIA,
   requestAbort,
   resetAbort,
   isAbortRequested,

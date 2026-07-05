@@ -651,6 +651,61 @@ function detectarListasPorNombre(listas) {
   return detectado;
 }
 
+// ── Mapeo de esquema Farmatic persistente (columnas/tablas) ─────────────────────────
+// Antes, cada función que necesitaba adivinar el nombre real de una columna (Cliente,
+// Venta, ListaArticu...) tenía su propia lista de candidatos hardcodeada y, si ninguno
+// coincidía, se resignaba en silencio — el único que se enteraba era yo, revisando logs
+// a mano en una farmacia concreta (caso real: jose con PER_NOMBRE/FIS_NOMBRE). Esto
+// generaliza esa resolución con memoria persistente en el backend (farmatic_field_map):
+// una vez resuelto un atributo para un tenant, no se vuelve a interpretar — se relee de
+// aquí en cada sync. Solo se re-evalúa si el valor guardado deja de existir en las
+// columnas reales de esta sync (p.ej. tras una actualización de Farmatic).
+let mapeoEsquemaActual = {};
+function setMapeoEsquema(mapeo) {
+  mapeoEsquemaActual = mapeo || {};
+}
+
+// Resuelve un atributo "de fontanería" (columna o tabla real) para `entidad.atributo`:
+// 1) valor ya persistido y que sigue existiendo entre las opciones reales de esta sync
+//    → se usa tal cual, sin más. Si dejó de existir (p.ej. Farmatic renombró la tabla de
+//    un año a otro, caso "Venta" → "Ventas2026"), NO se confía a ciegas — se re-resuelve.
+// 2) si no, heurística de candidatos conocidos (gratis, determinista) → si acierta, se
+//    persiste en segundo plano (no bloquea el sync) y se devuelve.
+// 3) si la heurística no encuentra nada, se pregunta a la IA (candidatos = TODAS las
+//    opciones reales) — si responde con confianza alta, el backend la aplica y persiste
+//    sola (marcada como pendiente de validar en el panel de admin); si no, la marca como
+//    error visible ahí, y aquí se devuelve null, igual que el "omitir" de antes.
+async function resolverAtributo({ entidad, atributo, candidatos, opciones, descripcion }) {
+  const disponibles = opciones instanceof Set ? opciones : new Set(opciones || []);
+  if (!disponibles.size) return null;
+
+  const guardado = mapeoEsquemaActual?.[entidad]?.[atributo];
+  if (guardado && disponibles.has(guardado)) return guardado;
+
+  const encontrado = (candidatos || []).find(c => disponibles.has(c));
+  if (encontrado) {
+    require('./api-client').reportarMapeoResuelto(entidad, atributo, encontrado, 'alta').catch(() => {});
+    return encontrado;
+  }
+
+  try {
+    const r = await require('./api-client').resolverConIA(entidad, atributo, descripcion, [...disponibles].map(nombre => ({ nombre })));
+    return (r && r.aplicar) ? r.valor_resuelto : null;
+  } catch {
+    return null;
+  }
+}
+
+// Alias semánticos — misma lógica y mismo almacén (farmatic_field_map), solo cambia qué
+// se está resolviendo: el nombre real de una COLUMNA dentro de una tabla ya conocida, o
+// el nombre real de la propia TABLA (para cuando Farmatic renombra tablas enteras).
+function resolverAtributoColumna({ entidad, atributo, candidatos, columnasReales, descripcion }) {
+  return resolverAtributo({ entidad, atributo, candidatos, opciones: columnasReales, descripcion });
+}
+function resolverAtributoTabla({ entidad, atributo, candidatos, tablasReales, descripcion }) {
+  return resolverAtributo({ entidad, atributo, candidatos, opciones: tablasReales, descripcion });
+}
+
 // Las 7 categorías y su env var — cada una es independiente. Antes exigíamos las 6
 // principales completas o no se leía/escribía nada; eso hacía que, si una farmacia real
 // no distinguía o no mapeaba bien una sola categoría (nombres de lista distintos a los
@@ -1273,6 +1328,9 @@ module.exports = {
   getCategoriaLista,
   detectarListasPorNombre,
   categoriasSinResolver,
+  setMapeoEsquema,
+  resolverAtributoColumna,
+  resolverAtributoTabla,
   crearListasCategoriaYFavoritosIniciales,
   discoverSchema,
   discoverDataQuality,

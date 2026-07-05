@@ -78,6 +78,12 @@ async function runSync(opts = {}) {
     return { ...resultados, elapsed: '0s' };
   }
 
+  // Carga el mapeo de columnas/tablas ya resuelto para este tenant (ver
+  // resolverAtributoColumna en farmatic-client.js) — una vez por sync, en memoria, así
+  // lo ya resuelto (por heurística, IA o a mano desde el panel de admin) no se vuelve a
+  // interpretar cada ciclo.
+  farmatic.setMapeoEsquema(await api.obtenerMapeoEsquema());
+
   // ── PASO 1b: Barrido de esquema Farmatic ─────────────────────────────
   // Se cachea por ciclo (farmatic.resetSchemaCache() la limpia en cada runSync)
   // y se manda a NextFarma para poder ver de qué tablas/columnas dispone esta
@@ -602,12 +608,33 @@ async function syncNuevosCronicos(farmaticPool, apiClient, log) {
       const encontrada = candidatos.find(c => colsCliente.has(c));
       return encontrada ? `c.${encontrada}` : 'NULL';
     };
-    const selNombre    = pick('Nombre', 'PER_NOMBRE', 'FIS_NOMBRE');
+    // nombre/teléfono/id_cliente pasan por el resolvedor persistente (heurística → IA →
+    // panel de admin si nada funciona); apellidos y teléfono2 no tienen variantes
+    // conocidas todavía, así que se quedan con el chequeo directo de siempre.
+    const colNombre = await farmatic.resolverAtributoColumna({
+      entidad: 'CLIENTE', atributo: 'nombre',
+      candidatos: ['Nombre', 'PER_NOMBRE', 'FIS_NOMBRE'],
+      columnasReales: colsCliente,
+      descripcion: 'Columna de la tabla Cliente con el nombre de pila del cliente/paciente (no el nombre fiscal/de una empresa, si hay ambos).',
+    });
+    const colTelefono = await farmatic.resolverAtributoColumna({
+      entidad: 'CLIENTE', atributo: 'telefono',
+      candidatos: ['Telefono', 'PER_TELEFONO', 'FIS_TELEFONO'],
+      columnasReales: colsCliente,
+      descripcion: 'Columna de la tabla Cliente con el teléfono personal de contacto del cliente/paciente.',
+    });
+    const colIdClienteResuelta = await farmatic.resolverAtributoColumna({
+      entidad: 'CLIENTE', atributo: 'id_cliente',
+      candidatos: ['IdCliente', 'IDCLIENTE'],
+      columnasReales: colsCliente,
+      descripcion: 'Columna clave primaria/identificador numérico del cliente en la tabla Cliente, usada para relacionarla con otras tablas.',
+    });
+    const selNombre    = colNombre ? `c.${colNombre}` : 'NULL';
     const selApellido1 = pick('Apellido1');
     const selApellido2 = pick('Apellido2');
-    const selTelefono  = pick('Telefono', 'PER_TELEFONO', 'FIS_TELEFONO');
+    const selTelefono  = colTelefono ? `c.${colTelefono}` : 'NULL';
     const selTelefono2 = pick('Telefono2');
-    const colIdCliente = colsCliente.has('IdCliente') ? 'IdCliente' : colsCliente.has('IDCLIENTE') ? 'IDCLIENTE' : 'IdCliente';
+    const colIdCliente = colIdClienteResuelta || 'IdCliente';
 
     const result = await farmaticPool.request().query(`
       SELECT
