@@ -178,6 +178,30 @@ async function reportarListasCreadas(payload) {
   }
 }
 
+// Avisa al SaaS de que hay categorías de favoritos configuradas solo a medias, para que
+// el titular vea un aviso y termine el asistente. El backend hace el dedup (no repite
+// el aviso mientras el anterior siga sin leer), así que aquí solo se reporta sin más.
+async function reportarCategoriasSinResolver(categorias) {
+  try {
+    return await request('/api/sync/categorias-sin-resolver', { method: 'POST', body: { categorias } });
+  } catch (err) {
+    log.warn('reportarCategoriasSinResolver falló:', err.message);
+    return { ok: false };
+  }
+}
+
+// Sugerencia por IA de a qué lista de Farmatic corresponde cada categoría sin resolver
+// (ni config guardada ni detección por nombre) — solo lectura, nunca se aplica sola en
+// el wizard, solo pre-rellena con una insignia que pide revisión.
+async function sugerirListas(listas, categorias) {
+  try {
+    return await request('/api/sync/sugerir-listas', { method: 'POST', body: { listas, categorias } });
+  } catch (err) {
+    log.warn('sugerirListas falló:', err.message);
+    return { ok: false };
+  }
+}
+
 module.exports = {
   request,
   status,
@@ -196,6 +220,8 @@ module.exports = {
   obtenerConfigSync,
   obtenerCategoriasActuales,
   reportarListasCreadas,
+  reportarCategoriasSinResolver,
+  sugerirListas,
   requestAbort,
   resetAbort,
   isAbortRequested,

@@ -448,6 +448,9 @@ header {
 .wlist-row  { display: flex; align-items: center; gap: 12px; }
 .wlist-cat  { min-width: 150px; font-size: 12px; font-weight: 600; color: var(--text); }
 .wlist-sel  { flex: 1; }
+.wlist-badge { font-size: 11px; font-weight: 600; white-space: nowrap; padding: 2px 8px; border-radius: 10px; }
+.wlist-badge.auto { color: #2ea043; background: rgba(46,160,67,0.15); }
+.wlist-badge.ia   { color: #a371f7; background: rgba(163,113,247,0.15); }
 
 /* Diagnostic panel */
 .wdiag-panel {

@@ -296,7 +296,12 @@ ipcMain.handle('wizard-get-labs', async () => {
 ipcMain.handle('wizard-get-lists', async () => {
   try {
     const farmatic = require('../src/farmatic-client');
-    return { ok: true, data: await farmatic.fetchListasWizard() };
+    const data = await farmatic.fetchListasWizard();
+    // Detección por nombre (caso jose: "INCENTIVADOS", "MAX ROTACION A/B"...) — se manda
+    // como sugerencia al wizard, nunca se aplica sola. Si esta instalación usa nombres
+    // distintos no detecta nada y el titular sigue eligiendo a mano del desplegable.
+    const detectadas = farmatic.detectarListasPorNombre(data);
+    return { ok: true, data, detectadas };
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -317,6 +322,15 @@ ipcMain.handle('wizard-verify-rgpd', async (_, opcion) => {
     const farmatic = require('../src/farmatic-client');
     const count = await farmatic.fetchRGPDCount(opcion);
     return { ok: true, count };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('wizard-suggest-lists', async (_, listas, categorias) => {
+  try {
+    const api = require('../src/api-client');
+    return await api.sugerirListas(listas, categorias);
   } catch (err) {
     return { ok: false, error: err.message };
   }

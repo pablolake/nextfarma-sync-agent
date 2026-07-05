@@ -624,6 +624,7 @@ async function wizardLoadLists() {
   }
 
   wz.lists = res.data;
+  const detectadas = res.detectadas || {};
   const cfg   = await window.sync.loadConfig();
   const saved = cfg.wizard || {};
 
@@ -632,24 +633,73 @@ async function wizardLoadLists() {
     `<option value="${l.id}">Lista ${l.id} — ${escapeHtml(l.nombre)} (${l.n_items} ítems)</option>`
   ).join('');
 
+  // Sin valores por defecto fijos: cada instalación de Farmatic numera sus listas de
+  // forma distinta (el ID 67 de una farmacia no tiene nada que ver con el 67 de otra).
+  // Si no hay config guardada ni detección por nombre, se deja "— Sin asignar —" y es
+  // el titular quien elige del desplegable — nunca se adivina un ID a ciegas.
   const fields = [
-    ['wz-list-star',  'listIncentivadosStar', 67],
-    ['wz-list-inc',   'listIncentivados',    102],
-    ['wz-list-mrota', 'listMaxRotA',         103],
-    ['wz-list-mrotb', 'listMaxRotB',         104],
-    ['wz-list-resto',       'listResto',       105],
-    ['wz-list-par',         'listParados',     106],
-    ['wz-list-consolidado', 'listConsolidado', null],
+    ['wz-list-star',  'listIncentivadosStar', 'INCENTIVADOS_STAR'],
+    ['wz-list-inc',   'listIncentivados',     'INCENTIVADOS'],
+    ['wz-list-mrota', 'listMaxRotA',          'MAX_ROTACION_A'],
+    ['wz-list-mrotb', 'listMaxRotB',          'MAX_ROTACION_B'],
+    ['wz-list-resto',       'listResto',       'RESTO'],
+    ['wz-list-par',         'listParados',     'PARADOS'],
+    ['wz-list-consolidado', 'listConsolidado', 'CONSOLIDADO'],
     ['wz-list-negra',       'listNegra',       null],
   ];
-  for (const [selId, key, def] of fields) {
+  const sinResolver = [];
+  for (const [selId, key, categoria] of fields) {
     const sel = document.getElementById(selId);
     sel.innerHTML = opts;
-    const val = saved[key] || def;
+    const detectadoId = categoria ? detectadas[categoria] : null;
+    const val = saved[key] || detectadoId || null;
     if (val) sel.value = String(val);
+    const badge = document.getElementById(selId + '-badge');
+    if (badge) {
+      if (!saved[key] && detectadoId) {
+        badge.textContent = '✓ detectado';
+        badge.className = 'wlist-badge auto';
+        badge.style.display = '';
+      } else {
+        badge.style.display = 'none';
+      }
+    }
+    if (categoria && !saved[key] && !detectadoId) sinResolver.push([selId, categoria]);
+    if (badge) sel.addEventListener('change', () => { badge.style.display = 'none'; });
   }
 
   document.getElementById('w2-form').style.display = '';
+
+  // Para lo que ni el nombre exacto ni la config guardada resuelven, se pide una
+  // sugerencia a la IA (en segundo plano, no bloquea el wizard) — nunca se aplica sola,
+  // solo pre-rellena con una insignia morada distinta que dice que hay que revisarla.
+  if (sinResolver.length) wizardSuggestLists(sinResolver);
+}
+
+async function wizardSuggestLists(sinResolver) {
+  const categorias = sinResolver.map(([, categoria]) => categoria);
+  let res;
+  try {
+    res = await window.sync.wizardSuggestLists(wz.lists, categorias);
+  } catch {
+    return;
+  }
+  if (!res || !res.ok || !res.suggestions) return;
+  for (const [selId, categoria] of sinResolver) {
+    const s = res.suggestions[categoria];
+    if (!s || !s.id) continue;
+    const sel = document.getElementById(selId);
+    if (!sel || sel.value) continue; // el titular ya tocó el campo mientras llegaba la sugerencia
+    if (![...sel.options].some(o => o.value === String(s.id))) continue;
+    sel.value = String(s.id);
+    const badge = document.getElementById(selId + '-badge');
+    if (badge) {
+      badge.textContent = '🤖 sugerido por IA — revisa';
+      badge.className = 'wlist-badge ia';
+      badge.title = s.razon || '';
+      badge.style.display = '';
+    }
+  }
 }
 
 function wizardCollectLists() {

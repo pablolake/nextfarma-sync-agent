@@ -120,6 +120,16 @@ async function runSync(opts = {}) {
         log.info(`✓ Listas detectadas por nombre: ${nuevas.map(([k, id]) => `${k}=${id}`).join(', ')}`);
       }
     }
+    // Si la farmacia ya tiene ALGUNAS categorías resueltas (config manual o detección)
+    // pero no todas, probablemente le interesa terminar de configurarlas — se avisa en
+    // el SaaS (una vez, no en cada sync) para que abra el asistente. CONSOLIDADO es
+    // opcional por diseño (ver wizard), así que no cuenta para decidir si merece avisar.
+    // Si NINGUNA está resuelta, es más probable que la farmacia simplemente no use esta
+    // función todavía, así que no se avisa.
+    const pendientes = farmatic.categoriasSinResolver().filter(c => c !== 'CONSOLIDADO');
+    if (pendientes.length > 0 && pendientes.length < 6) {
+      await api.reportarCategoriasSinResolver(pendientes).catch(() => {});
+    }
     await api.enviarSchemaInfo({
       ...schema,
       ...(calidad ? { calidad } : {}),

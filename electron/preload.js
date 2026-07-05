@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('sync', {
   wizardRunDiagnostic: (key)    => ipcRenderer.invoke('wizard-run-diagnostic', key),
   wizardVerifyRGPD:    (opcion) => ipcRenderer.invoke('wizard-verify-rgpd', opcion),
   wizardSave:        (cfg)     => ipcRenderer.invoke('wizard-save', cfg),
+  wizardSuggestLists: (listas, categorias) => ipcRenderer.invoke('wizard-suggest-lists', listas, categorias),
 
   onLog:         (cb) => { ipcRenderer.on('log',          (_, d) => cb(d)); },
   onSyncStatus:  (cb) => { ipcRenderer.on('sync-status',  (_, d) => cb(d)); },

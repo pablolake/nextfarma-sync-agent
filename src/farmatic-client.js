@@ -667,6 +667,15 @@ const CATEGORIA_ENV = {
   CONSOLIDADO:        'LIST_CONSOLIDADO',
 };
 
+// Categorías que ni la config guardada ni la detección por nombre han resuelto todavía
+// (sin env var puesta). Se usa para avisar al titular en el SaaS de que puede terminar
+// de configurar el wizard — nunca para escribir ni para bloquear el sync.
+function categoriasSinResolver() {
+  return Object.entries(CATEGORIA_ENV)
+    .filter(([, envKey]) => !process.env[envKey])
+    .map(([categoria]) => categoria);
+}
+
 // Lista IDs → categoría (para leer favoritos de Farmatic). Sin ninguna configurada → null
 // (leer desactivado del todo). Con al menos una configurada, se usa esa parcialmente.
 function getListaCategoria() {
@@ -1263,6 +1272,7 @@ module.exports = {
   procesarListaNegraPendiente,
   getCategoriaLista,
   detectarListasPorNombre,
+  categoriasSinResolver,
   crearListasCategoriaYFavoritosIniciales,
   discoverSchema,
   discoverDataQuality,
