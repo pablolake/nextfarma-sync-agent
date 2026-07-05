@@ -231,13 +231,23 @@ async function fetchProductos() {
     `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Articu'`
   );
   const colsArticu = new Set(colsR.recordset.map(r => String(r.COLUMN_NAME)));
-  const has     = c => colsArticu.has(c);
-  const pickCol = (...candidates) => candidates.find(has) || null;
 
-  const colPvl  = pickCol('Pvl', 'PVL', 'PVLIVA', 'PvlIva', 'PrecioVentaLab', 'PrecioAlmacen');
-  const colPuc  = pickCol('Puc', 'PUC', 'PrecioCompra', 'PrecioUltimaCompra');
-  const colPmc  = pickCol('Pmc', 'PMC', 'PrecioMedioCompra');
-  const colIva  = pickCol('IVA', 'Iva', 'TipoIva', 'TipoIVA', 'XGrup_IdGrupoIva');
+  const colPvl = await resolverAtributoColumna({
+    entidad: 'ARTICU', atributo: 'pvl', candidatos: ['Pvl', 'PVL', 'PVLIVA', 'PvlIva', 'PrecioVentaLab', 'PrecioAlmacen'],
+    columnasReales: colsArticu, descripcion: 'Columna de la tabla Articu con el precio de venta al público del laboratorio (PVL), antes de IVA.',
+  });
+  const colPuc = await resolverAtributoColumna({
+    entidad: 'ARTICU', atributo: 'puc', candidatos: ['Puc', 'PUC', 'PrecioCompra', 'PrecioUltimaCompra'],
+    columnasReales: colsArticu, descripcion: 'Columna de la tabla Articu con el precio de última compra a la farmacia (PUC/coste de compra).',
+  });
+  const colPmc = await resolverAtributoColumna({
+    entidad: 'ARTICU', atributo: 'pmc', candidatos: ['Pmc', 'PMC', 'PrecioMedioCompra'],
+    columnasReales: colsArticu, descripcion: 'Columna de la tabla Articu con el precio medio de compra (PMC).',
+  });
+  const colIva = await resolverAtributoColumna({
+    entidad: 'ARTICU', atributo: 'iva', candidatos: ['IVA', 'Iva', 'TipoIva', 'TipoIVA', 'XGrup_IdGrupoIva'],
+    columnasReales: colsArticu, descripcion: 'Columna de la tabla Articu con el tipo/grupo de IVA del artículo.',
+  });
   const selPvl  = colPvl ? `a.${colPvl} AS pvl,` : `NULL AS pvl,`;
   const selPuc  = colPuc ? `a.${colPuc} AS puc,` : `NULL AS puc,`;
   const selPmc  = colPmc ? `a.${colPmc} AS pmc,` : `NULL AS pmc,`;
@@ -369,26 +379,32 @@ async function detectarFiltroFacturada(p) {
     `SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Venta'`
   );
   const cols = new Map(r.recordset.map(c => [String(c.COLUMN_NAME), String(c.DATA_TYPE)]));
-  const candidatos = ['Facturada', 'Facturado', 'EstadoFact', 'EstadoFactura', 'Estado'];
-  for (const c of candidatos) {
-    if (cols.has(c)) {
-      const tipo = cols.get(c).toLowerCase();
-      if (/char|text/.test(tipo)) {
-        const sample = await p.request().query(`
-          SELECT TOP 1 LTRIM(RTRIM(${c})) AS v
-          FROM Venta WHERE ${c} IS NOT NULL AND LTRIM(RTRIM(${c})) <> ''
-          GROUP BY LTRIM(RTRIM(${c})) ORDER BY COUNT(*) DESC
-        `).catch(() => ({ recordset: [] }));
-        const valor = sample.recordset[0]?.v;
-        if (valor) {
-          const valEsc = String(valor).replace(/'/g, "''");
-          log.info(`Facturada: col="${c}" valor="${valor}"`);
-          return { col: c, filtro: `LTRIM(RTRIM(v.${c})) = '${valEsc}'` };
-        }
-        return { col: c, filtro: '1 = 1' };
-      } else {
-        return { col: c, filtro: `v.${c} = 1` };
+  // Qué COLUMNA usar pasa por el resolvedor persistente (heurística → IA → panel de
+  // admin); qué SIGNIFICA su valor (booleano vs. código de texto a muestrear) sigue
+  // siendo lógica local, ya que depende de datos reales de esta sync, no de un nombre.
+  const c = await resolverAtributoColumna({
+    entidad: 'VENTA', atributo: 'facturada_columna',
+    candidatos: ['Facturada', 'Facturado', 'EstadoFact', 'EstadoFactura', 'Estado'],
+    columnasReales: new Set(cols.keys()),
+    descripcion: 'Columna de la tabla Venta que marca si una venta está facturada/confirmada, no un borrador o venta anulada. Puede ser un booleano (0/1) o un código de texto.',
+  });
+  if (c) {
+    const tipo = (cols.get(c) || '').toLowerCase();
+    if (/char|text/.test(tipo)) {
+      const sample = await p.request().query(`
+        SELECT TOP 1 LTRIM(RTRIM(${c})) AS v
+        FROM Venta WHERE ${c} IS NOT NULL AND LTRIM(RTRIM(${c})) <> ''
+        GROUP BY LTRIM(RTRIM(${c})) ORDER BY COUNT(*) DESC
+      `).catch(() => ({ recordset: [] }));
+      const valor = sample.recordset[0]?.v;
+      if (valor) {
+        const valEsc = String(valor).replace(/'/g, "''");
+        log.info(`Facturada: col="${c}" valor="${valor}"`);
+        return { col: c, filtro: `LTRIM(RTRIM(v.${c})) = '${valEsc}'` };
       }
+      return { col: c, filtro: '1 = 1' };
+    } else {
+      return { col: c, filtro: `v.${c} = 1` };
     }
   }
   log.warn('⚠ AVISO: no se detectó columna Facturada en tabla Venta — se sincronizarán TODAS las ventas (incluidos borradores/anulados). Revisa la configuración de Farmatic.');
@@ -485,12 +501,23 @@ async function fetchRecepcionesRecientes(mesesAtras = 12) {
     `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'LineaRecep'`
   );
   const colsLR = new Set(colsR.recordset.map(c => String(c.COLUMN_NAME)));
-  const pick = (...cs) => cs.find(c => colsLR.has(c)) || null;
 
-  const colCodigo   = pick('Codigo', 'IdArticu');
-  const colCantidad = pick('Cantidad');
-  const colPrecio   = pick('PrecioNeto', 'Precio', 'PrecioUnit', 'PrecioCompra', 'Importe');
-  const colBonif    = pick('Bonificacion', 'Dto', 'Descuento', 'PctBonif');
+  const colCodigo = await resolverAtributoColumna({
+    entidad: 'LINEA_RECEP', atributo: 'codigo', candidatos: ['Codigo', 'IdArticu'],
+    columnasReales: colsLR, descripcion: 'Columna de LineaRecep con el código nacional o identificador del artículo recibido en cada línea de recepción/albarán.',
+  });
+  const colCantidad = await resolverAtributoColumna({
+    entidad: 'LINEA_RECEP', atributo: 'cantidad', candidatos: ['Cantidad'],
+    columnasReales: colsLR, descripcion: 'Columna de LineaRecep con la cantidad de unidades recibidas en cada línea.',
+  });
+  const colPrecio = await resolverAtributoColumna({
+    entidad: 'LINEA_RECEP', atributo: 'precio', candidatos: ['PrecioNeto', 'Precio', 'PrecioUnit', 'PrecioCompra', 'Importe'],
+    columnasReales: colsLR, descripcion: 'Columna de LineaRecep con el precio neto de compra de cada línea de recepción.',
+  });
+  const colBonif = await resolverAtributoColumna({
+    entidad: 'LINEA_RECEP', atributo: 'bonificacion', candidatos: ['Bonificacion', 'Dto', 'Descuento', 'PctBonif'],
+    columnasReales: colsLR, descripcion: 'Columna de LineaRecep con el porcentaje de bonificación/descuento del proveedor en la recepción, si existe.',
+  });
 
   if (!colCodigo || !colCantidad || !colPrecio) {
     log.warn('LineaRecep sin columnas clave');
@@ -501,7 +528,10 @@ async function fetchRecepcionesRecientes(mesesAtras = 12) {
     `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Recep'`
   );
   const colsRec  = new Set(colsR2.recordset.map(c => String(c.COLUMN_NAME)));
-  const colFecha = ['FechaAlbaran', 'Fecha', 'FechaRecep'].find(c => colsRec.has(c));
+  const colFecha = await resolverAtributoColumna({
+    entidad: 'RECEP', atributo: 'fecha', candidatos: ['FechaAlbaran', 'Fecha', 'FechaRecep'],
+    columnasReales: colsRec, descripcion: 'Columna de Recep con la fecha del albarán/recepción de mercancía.',
+  });
   if (!colFecha) { log.warn('Recep sin columna de fecha.'); return []; }
 
   const selBonif  = colBonif ? `lr.${colBonif} AS bonificacion,` : `NULL AS bonificacion,`;
@@ -846,7 +876,10 @@ async function fetchVendedoresFarmatic() {
     `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Vendedor'`
   ).catch(() => ({ recordset: [] }));
   const colsVendedor = new Set(colsR.recordset.map(r => String(r.COLUMN_NAME)));
-  const colBaja = ['Baja', 'BajaVend', 'FechaBaja'].find(c => colsVendedor.has(c)) || null;
+  const colBaja = await resolverAtributoColumna({
+    entidad: 'VENDEDOR', atributo: 'baja_columna', candidatos: ['Baja', 'BajaVend', 'FechaBaja'],
+    columnasReales: colsVendedor, descripcion: 'Columna de la tabla Vendedor que marca si un vendedor/empleado está de baja (inactivo). Puede ser un booleano o una fecha de baja.',
+  });
   const whereBaja = colBaja
     ? (colBaja === 'FechaBaja' ? `${colBaja} IS NULL AND ` : `(${colBaja} IS NULL OR ${colBaja} = 0) AND `)
     : '';
@@ -893,7 +926,10 @@ async function crearListasCategoriaYFavoritosIniciales(categoriasActuales) {
     `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'ListaArticu'`
   ).catch(() => ({ recordset: [] }));
   const cols = new Set(colsR.recordset.map(r => String(r.COLUMN_NAME)));
-  const colNombre = cols.has('Nombre') ? 'Nombre' : cols.has('Descripcion') ? 'Descripcion' : null;
+  const colNombre = await resolverAtributoColumna({
+    entidad: 'LISTA_ARTICU', atributo: 'nombre', candidatos: ['Nombre', 'Descripcion'],
+    columnasReales: cols, descripcion: 'Columna de ListaArticu con el nombre/descripción visible de cada lista de artículos.',
+  });
   if (!colNombre) {
     log.warn('Auto-creación de listas omitida: ListaArticu no tiene columna Nombre/Descripcion reconocible');
     return null;
@@ -1123,14 +1159,21 @@ async function fetchListasWizard() {
   const tbl = await p.request().query(
     `SELECT name FROM sys.tables WHERE name IN ('ListaArticu', 'Lista', 'Listas')`
   ).catch(() => ({ recordset: [] }));
-  const tablaNombres = tbl.recordset[0]?.name;
+  const tablaNombres = await resolverAtributoTabla({
+    entidad: 'TABLA', atributo: 'lista_articulos', candidatos: ['ListaArticu', 'Lista', 'Listas'],
+    tablasReales: new Set(tbl.recordset.map(r => r.name)),
+    descripcion: 'Tabla que almacena las listas de artículos de Farmatic (cabeceras de lista, cada una con un id y un nombre).',
+  });
 
   if (tablaNombres) {
     const colsR = await p.request().query(
       `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${tablaNombres}'`
     ).catch(() => ({ recordset: [] }));
     const cols = new Set(colsR.recordset.map(r => r.COLUMN_NAME));
-    const colNombre = cols.has('Nombre') ? 'Nombre' : cols.has('Descripcion') ? 'Descripcion' : null;
+    const colNombre = await resolverAtributoColumna({
+      entidad: 'LISTA_ARTICU', atributo: 'nombre', candidatos: ['Nombre', 'Descripcion'],
+      columnasReales: cols, descripcion: 'Columna de la tabla de listas de artículos con el nombre/descripción visible de cada lista.',
+    });
 
     if (colNombre) {
       const r = await p.request().query(`
