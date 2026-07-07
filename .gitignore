@@ -5,3 +5,4 @@ out/
 .env
 descuentos/
 cronicos.db
+src/schema-calidad-last-run.json

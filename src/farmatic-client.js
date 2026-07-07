@@ -250,16 +250,14 @@ async function fetchProductos() {
   );
   const colsArticu = new Set(colsR.recordset.map(r => String(r.COLUMN_NAME)));
 
-  const colPvl = await resolverAtributoColumna({
-    entidad: 'ARTICU', atributo: 'pvl', candidatos: ['Pvl', 'PVL', 'PVLIVA', 'PvlIva', 'PrecioVentaLab', 'PrecioAlmacen'],
-    // OJO: la descripción anterior decía "precio de venta AL PÚBLICO del laboratorio
-    // (PVL)" — la frase "al público" coincide textualmente con PVP (Precio de Venta al
-    // Público) y llevó a la IA a resolver esto como la columna Pvp con confianza alta,
-    // corrompiendo el margen de farmacia jose (pvl quedó igual a pvp en el 85% de sus
-    // productos). PVL es el precio AL QUE EL LABORATORIO VENDE A LA FARMACIA — nunca "al
-    // público" — la redacción tiene que dejarlo inequívoco.
-    columnasReales: colsArticu, descripcion: 'Columna de la tabla Articu con el PVL: el precio al que el LABORATORIO vende el producto A LA FARMACIA (precio de fábrica/almacén, antes del margen de la farmacia y antes de IVA). NO es el precio al público (ese es PVP, un atributo distinto) — PVL es siempre menor que PVP.',
-  });
+  // PVL NO se lee de ninguna columna de Farmatic — se probó (resolverAtributoColumna con
+  // candidatos Pvl/PVL/PVLIVA/...) y fue justo lo que corrompió el margen de farmacia
+  // jose: la IA (con una descripción entonces ambigua) resolvió "pvl" como la columna
+  // Pvp, dejando pvl=pvp en el 85% de su catálogo. La fórmula PVP × PVL_FACTOR (0.6406)
+  // ya está verificada contra el catálogo real de 4DB (diferencia <0.01€ en el 99% de
+  // los casos, ver doc "6.1 Cálculo PVL y MU") — no es un fallback de emergencia, es EL
+  // cálculo. 4DB (más abajo, cuando cubre ese CN) sigue pisando esto con su propio
+  // pvl_4db, que es siempre más preciso que cualquier columna que pudiéramos adivinar.
   const colPuc = await resolverAtributoColumna({
     entidad: 'ARTICU', atributo: 'puc', candidatos: ['Puc', 'PUC', 'PrecioCompra', 'PrecioUltimaCompra'],
     columnasReales: colsArticu, descripcion: 'Columna de la tabla Articu con el precio de última compra a la farmacia (PUC/coste de compra).',
@@ -272,12 +270,11 @@ async function fetchProductos() {
     entidad: 'ARTICU', atributo: 'iva', candidatos: ['IVA', 'Iva', 'TipoIva', 'TipoIVA', 'XGrup_IdGrupoIva'],
     columnasReales: colsArticu, descripcion: 'Columna de la tabla Articu con el tipo/grupo de IVA del artículo.',
   });
-  const selPvl  = colPvl ? `a.${colPvl} AS pvl,` : `NULL AS pvl,`;
   const selPuc  = colPuc ? `a.${colPuc} AS puc,` : `NULL AS puc,`;
   const selPmc  = colPmc ? `a.${colPmc} AS pmc,` : `NULL AS pmc,`;
   const selIva  = colIva ? `CAST(a.${colIva} AS VARCHAR(16)) AS iva,` : `NULL AS iva,`;
 
-  log.info(`Columnas Articu: pvl=${colPvl||'—'} puc=${colPuc||'—'} iva=${colIva||'—'}`);
+  log.info(`Columnas Articu: pvl=PVP×${PVL_FACTOR} (calculado) puc=${colPuc||'—'} iva=${colIva||'—'}`);
 
   const cdb = CONSEJO_DB();
   const result = await p.request().query(`
@@ -286,7 +283,6 @@ async function fetchProductos() {
       LTRIM(RTRIM(a.Descripcion))       AS nombre,
       LTRIM(RTRIM(a.Laboratorio))       AS laboratorio,
       a.Pvp                             AS pvp,
-      ${selPvl}
       ${selPuc}
       ${selPmc}
       ${selIva}
@@ -341,9 +337,10 @@ async function fetchProductos() {
 
     vistos.add(cn);
 
-    let pvl = r.pvl != null
-      ? +Number(r.pvl).toFixed(4)
-      : (pvp != null ? +(pvp * PVL_FACTOR).toFixed(4) : null);
+    // PVL siempre calculado (ver comentario junto a fetchProductos más arriba) — 4DB lo
+    // pisa más abajo en sync.js (prod.pvl = d.pvl_4db || prod.pvl) cuando tiene el dato
+    // real para ese CN, que es más preciso que esta fórmula.
+    let pvl = pvp != null ? +(pvp * PVL_FACTOR).toFixed(4) : null;
     if (pvl != null && pvl <= 0) pvl = null;
 
     const dtoEntry = dtos.get(cn);
