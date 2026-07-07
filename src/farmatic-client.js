@@ -184,6 +184,24 @@ async function discoverDataQuality(schema) {
       log.warn(`discoverDataQuality falló en ${tabla}:`, err.message);
     }
   }
+
+  // 4DB (Cofares Conecta 4D): hoy fetch4DBDescuentos() solo lee MAX(catalogo) — el más
+  // reciente. Si Farmatic conserva más de un catálogo histórico en esta instalación,
+  // se podría reconstruir el histórico real de precio/dto de meses pasados en vez de
+  // partir de cero en cns_precio_historico (backend). Esto es solo diagnóstico — no
+  // cambia qué catálogo usa el sync para escribir precios.
+  try {
+    const tabla4db = await p.request().query(`SELECT name FROM sys.tables WHERE name = '_4DB_CAT_CatalogoArt'`);
+    if (tabla4db.recordset.length) {
+      const cats = await p.request().query(
+        `SELECT catalogo, COUNT(*) AS n FROM _4DB_CAT_CatalogoArt GROUP BY catalogo ORDER BY catalogo DESC`
+      );
+      calidad.__catalogos_4db = cats.recordset.map(r => ({ catalogo: r.catalogo, filas: r.n }));
+    }
+  } catch (err) {
+    log.warn('Diagnóstico catálogos 4DB falló:', err.message);
+  }
+
   marcarEjecutadoHoy();
   return calidad;
 }
@@ -234,7 +252,13 @@ async function fetchProductos() {
 
   const colPvl = await resolverAtributoColumna({
     entidad: 'ARTICU', atributo: 'pvl', candidatos: ['Pvl', 'PVL', 'PVLIVA', 'PvlIva', 'PrecioVentaLab', 'PrecioAlmacen'],
-    columnasReales: colsArticu, descripcion: 'Columna de la tabla Articu con el precio de venta al público del laboratorio (PVL), antes de IVA.',
+    // OJO: la descripción anterior decía "precio de venta AL PÚBLICO del laboratorio
+    // (PVL)" — la frase "al público" coincide textualmente con PVP (Precio de Venta al
+    // Público) y llevó a la IA a resolver esto como la columna Pvp con confianza alta,
+    // corrompiendo el margen de farmacia jose (pvl quedó igual a pvp en el 85% de sus
+    // productos). PVL es el precio AL QUE EL LABORATORIO VENDE A LA FARMACIA — nunca "al
+    // público" — la redacción tiene que dejarlo inequívoco.
+    columnasReales: colsArticu, descripcion: 'Columna de la tabla Articu con el PVL: el precio al que el LABORATORIO vende el producto A LA FARMACIA (precio de fábrica/almacén, antes del margen de la farmacia y antes de IVA). NO es el precio al público (ese es PVP, un atributo distinto) — PVL es siempre menor que PVP.',
   });
   const colPuc = await resolverAtributoColumna({
     entidad: 'ARTICU', atributo: 'puc', candidatos: ['Puc', 'PUC', 'PrecioCompra', 'PrecioUltimaCompra'],
