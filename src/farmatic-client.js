@@ -1238,6 +1238,11 @@ async function crearListasCategoriaYFavoritosIniciales(categoriasActuales) {
   const hoy = new Date();
   const cutoff = (hoy.getFullYear() - 1) * 100 + (hoy.getMonth() + 1); // últimos ~12 meses
 
+  // Un ético nunca puede quedar de favorito (misma regla que en el SaaS) — GeneArti.EFG es
+  // la señal ya usada en todo el sistema para distinguir genérico/ético (EFG=1 → GENÉRICO,
+  // EFG=0/NULL → ÉTICO, ver fetchProductos()). Sin este filtro, el producto de marca
+  // original del grupo homogéneo (que suele tener más ventas históricas que sus genéricos)
+  // podía quedar sembrado como favorito inicial de una farmacia nueva.
   const topR = await p.request().query(`
     SELECT ch, cn FROM (
       SELECT g.IdGrupoGen AS ch, lv.Codigo AS cn, SUM(lv.Cantidad) AS uds,
@@ -1249,6 +1254,7 @@ async function crearListasCategoriaYFavoritosIniciales(categoriasActuales) {
         AND ${fac.filtro} ${exclClause}
         AND lv.Cantidad > 0
         AND g.IdGrupoGen IS NOT NULL AND g.IdGrupoGen > 0
+        AND g.EFG = 1
       GROUP BY g.IdGrupoGen, lv.Codigo
     ) t
     WHERE rn = 1
