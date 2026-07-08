@@ -828,11 +828,47 @@ async function fetchFavoritosListas() {
   return favoritos;
 }
 
+// Farmacias sin las 7 listas de categoría configuradas (getListaCategoria() → null) pueden
+// tener en su lugar UNA sola lista genérica de favoritos, mezclando todas las categorías —
+// la IA ayuda a localizarla entre las listas reales de la instalación, mismo patrón que
+// resolverAtributoColumna/Tabla para columnas y tablas de Farmatic (candidatos_ia,
+// aceptar/rechazar desde el panel admin). Solo aporta IDENTIDAD de favorito — nunca
+// categoría: esos GH quedan para que el propio SaaS sugiera categoría con su lógica de
+// rotación/ventas (categoria_sugerida), igual que cualquier GH sin categoría manual.
+async function resolverListaFavoritosUnica() {
+  const listas = await fetchListasWizard();
+  const mapeadas = new Set(Object.keys(getListaCategoria() || {}).map(Number));
+  const candidatas = listas.filter(l => !mapeadas.has(l.id) && l.n_items > 0);
+  if (!candidatas.length) return null;
+  const opciones = new Set(candidatas.map(l => `${l.id} - ${l.nombre}`));
+  const heuristicos = candidatas
+    .filter(l => /favorit|preferen|recomend/i.test(l.nombre))
+    .map(l => `${l.id} - ${l.nombre}`);
+  const elegido = await resolverAtributoTabla({
+    entidad: 'LISTA_ARTICU', atributo: 'lista_favoritos_unica',
+    candidatos: heuristicos, tablasReales: opciones,
+    descripcion: 'Esta farmacia no tiene configuradas las 7 listas de categoría de favoritos ' +
+      '(STAR/INCENTIVADOS/MAX_ROTACION_A/B/RESTO/PARADOS/CONSOLIDADO). Puede que use en su lugar UNA ' +
+      'sola lista genérica donde marca sus productos favoritos, mezclando todas las categorías. De ' +
+      'estas listas reales de Farmatic sin mapear a ninguna categoría, ¿cuál es la más probable ' +
+      'candidata a ser "la lista de favoritos" de la farmacia? Formato de cada opción: ' +
+      '"id - nombre" (con su número de artículos entre paréntesis, solo como referencia): ' +
+      candidatas.map(l => `${l.id} - ${l.nombre} (${l.n_items} artículos)`).join('; '),
+  })
+  if (!elegido) return null
+  const id = parseInt(elegido.split(' - ')[0], 10)
+  return Number.isFinite(id) ? id : null
+}
+
 async function fetchFavoritosActuales() {
   const lcat = getListaCategoria();
-  if (!lcat) return new Map();
+  let idUnica = null
+  if (!lcat) {
+    idUnica = await resolverListaFavoritosUnica()
+    if (idUnica == null) return new Map();
+  }
   const p   = await getPool();
-  const ids  = Object.keys(lcat).join(',');
+  const ids  = lcat ? Object.keys(lcat).join(',') : String(idUnica);
   try {
     const result = await p.request().query(`
       SELECT i.XItem_IdLista AS lista, i.XItem_IdArticu AS cn, g.IdGrupoGen AS ch
@@ -840,7 +876,7 @@ async function fetchFavoritosActuales() {
       INNER JOIN GeneArti g ON CAST(g.IdArticu AS VARCHAR) = CAST(i.XItem_IdArticu AS VARCHAR)
       WHERE i.XItem_IdLista IN (${ids}) AND g.IdGrupoGen IS NOT NULL AND g.IdGrupoGen > 0
     `);
-    const PRIORIDAD = Object.keys(lcat).map(Number).sort((a, b) => a - b);
+    const PRIORIDAD = lcat ? Object.keys(lcat).map(Number).sort((a, b) => a - b) : [idUnica];
     const porGH     = new Map();
     for (const prioridad of PRIORIDAD) {
       for (const row of result.recordset) {
