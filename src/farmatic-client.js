@@ -828,6 +828,41 @@ async function fetchFavoritosListas() {
   return favoritos;
 }
 
+// Contexto de dominio compartido por TODOS los diagnósticos de "búsqueda amplia" de
+// favoritos — no un texto genérico de una sola vez. Cuantos más casos reales vayamos
+// viendo, más se enriquece (el titular pidió explícitamente ir mejorando el prompt con el
+// tiempo en vez de dejarlo abstracto). Los ejemplos concretos (jose, jose-2) ayudan a la IA
+// a reconocer variantes que una descripción puramente abstracta no sugiere.
+const CONTEXTO_FAVORITOS_IA =
+  'Contexto de instalaciones reales ya vistas: la farmacia "jose" tiene 7 listas separadas ' +
+  'por categoría dentro de ListaArticu/ItemListaArticu (una por STAR/INCENTIVADOS/ROTACION_A/B/' +
+  'RESTO/PARADOS/CONSOLIDADO) — el mecanismo estándar de Farmatic. Otro caso real ("jose-2") no ' +
+  'tenía esas 7 categorías, sino UNA sola lista genérica dentro de ListaArticu, con un nombre que ' +
+  'ni siquiera mencionaba "favorito" (se llamaba "SELECCION PROPIA") — la IA acertó igualmente ' +
+  'razonando que era una selección manual sin categoría específica, no por coincidencia de texto. ' +
+  'Puede haber un TERCER patrón: una tabla completamente propia/personalizada de la farmacia, fuera ' +
+  'del mecanismo de listas de Farmatic, con nombres variados (FAVORIT_FARMACIA, SELECCION, ' +
+  'PREFERENTES, etc. — el nombre puede no contener literalmente la palabra "favorito"). ' +
+  'Señal de calidad importante en cualquiera de los tres casos: un favorito real es COMO MUCHO 1 por ' +
+  'grupo homogéneo (CH) — si una tabla o lista tiene VARIOS códigos para el mismo grupo, es motivo ' +
+  'fuerte para sospechar que NO es una lista de favoritos (podría ser stock, promociones, pedidos, u ' +
+  'otra cosa), y debe bajar la confianza de esa candidata aunque el nombre suene prometedor.'
+
+// Cuenta, para una lista de ItemListaArticu concreta, cuántos grupos homogéneos tienen más
+// de 1 CN — señal de alarma compartida por resolverListaFavoritosUnica y
+// resolverTablaFavoritosGenerica (ver CONTEXTO_FAVORITOS_IA).
+async function gruposConMasDeUnCn(p, idLista) {
+  const r = await p.request().query(`
+    SELECT COUNT(*) AS n FROM (
+      SELECT g.IdGrupoGen FROM ItemListaArticu i
+      JOIN GeneArti g ON CAST(g.IdArticu AS VARCHAR) = CAST(i.XItem_IdArticu AS VARCHAR)
+      WHERE i.XItem_IdLista = ${idLista}
+      GROUP BY g.IdGrupoGen HAVING COUNT(*) > 1
+    ) x
+  `).catch(() => ({ recordset: [{ n: 0 }] }));
+  return Number(r.recordset[0]?.n || 0);
+}
+
 // Farmacias sin las 7 listas de categoría configuradas (getListaCategoria() → null) pueden
 // tener en su lugar UNA sola lista genérica de favoritos, mezclando todas las categorías —
 // la IA ayuda a localizarla entre las listas reales de la instalación, mismo patrón que
@@ -836,38 +871,150 @@ async function fetchFavoritosListas() {
 // categoría: esos GH quedan para que el propio SaaS sugiera categoría con su lógica de
 // rotación/ventas (categoria_sugerida), igual que cualquier GH sin categoría manual.
 async function resolverListaFavoritosUnica() {
+  const p = await getPool();
   const listas = await fetchListasWizard();
   const mapeadas = new Set(Object.keys(getListaCategoria() || {}).map(Number));
   const candidatas = listas.filter(l => !mapeadas.has(l.id) && l.n_items > 0);
   if (!candidatas.length) return null;
-  const opciones = new Set(candidatas.map(l => `${l.id} - ${l.nombre}`));
-  const heuristicos = candidatas
-    .filter(l => /favorit|preferen|recomend/i.test(l.nombre))
+  const conAlarma = await Promise.all(
+    candidatas.map(async l => ({ ...l, grupos_con_mas_de_1_cn: await gruposConMasDeUnCn(p, l.id) }))
+  );
+  const opciones = new Set(conAlarma.map(l => `${l.id} - ${l.nombre}`));
+  const heuristicos = conAlarma
+    .filter(l => /favorit|preferen|recomend/i.test(l.nombre) && l.grupos_con_mas_de_1_cn === 0)
     .map(l => `${l.id} - ${l.nombre}`);
   const elegido = await resolverAtributoTabla({
     entidad: 'LISTA_ARTICU', atributo: 'lista_favoritos_unica',
     candidatos: heuristicos, tablasReales: opciones,
-    descripcion: 'Esta farmacia no tiene configuradas las 7 listas de categoría de favoritos ' +
-      '(STAR/INCENTIVADOS/MAX_ROTACION_A/B/RESTO/PARADOS/CONSOLIDADO). Puede que use en su lugar UNA ' +
-      'sola lista genérica donde marca sus productos favoritos, mezclando todas las categorías. De ' +
-      'estas listas reales de Farmatic sin mapear a ninguna categoría, ¿cuál es la más probable ' +
-      'candidata a ser "la lista de favoritos" de la farmacia? Formato de cada opción: ' +
-      '"id - nombre" (con su número de artículos entre paréntesis, solo como referencia): ' +
-      candidatas.map(l => `${l.id} - ${l.nombre} (${l.n_items} artículos)`).join('; '),
+    descripcion: `${CONTEXTO_FAVORITOS_IA} Esta farmacia no tiene configuradas las 7 listas de ` +
+      'categoría de favoritos. De estas listas reales de Farmatic sin mapear a ninguna categoría, ' +
+      '¿cuál es la más probable candidata a ser "la lista de favoritos" de la farmacia? Formato ' +
+      '"id - nombre — nº de artículos, grupos con >1 CN [alarma]": ' +
+      conAlarma.map(l => `${l.id} - ${l.nombre} — ${l.n_items} artículos, ${l.grupos_con_mas_de_1_cn} grupos con >1 CN`).join('; '),
   })
   if (!elegido) return null
   const id = parseInt(elegido.split(' - ')[0], 10)
   return Number.isFinite(id) ? id : null
 }
 
+// Último recurso cuando ni las 7 categorías ni una lista dentro de ListaArticu resuelven el
+// favorito: escanea TODAS las tablas reales de la instalación (no solo ListaArticu) buscando
+// alguna que pueda representar "favoritos" fuera del mecanismo estándar de listas de Farmatic
+// — caso real: una tabla propia/custom que la farmacia nunca gestionó como lista de Farmatic.
+// Mucho más caro que los dos casos anteriores (por eso es el ÚLTIMO fallback, no el primero),
+// pero necesario para no fallar nunca ante una instalación inesperada.
+async function resolverTablaFavoritosGenerica() {
+  const p = await getPool();
+
+  // 1) Todas las tablas reales con nº de filas aproximado (metadata de SQL Server, barato —
+  // nada de COUNT(*) por tabla). Se descartan vacías o enormes: una lista de favoritos real
+  // es pequeña (decenas a pocos miles), nunca el catálogo entero.
+  const tablasR = await p.request().query(`
+    SELECT t.name AS tabla, SUM(p.rows) AS n_filas
+    FROM sys.tables t
+    JOIN sys.partitions p ON p.object_id = t.object_id AND p.index_id IN (0,1)
+    GROUP BY t.name
+    HAVING SUM(p.rows) BETWEEN 1 AND 200000
+  `).catch(() => ({ recordset: [] }));
+  if (!tablasR.recordset.length) return null;
+
+  // 2) Columnas de esas tablas cuyo NOMBRE sugiere que podrían contener un código nacional
+  // (heurística barata; el filtrado real y caro es el paso 3, contra datos de verdad).
+  const nombresTablas = tablasR.recordset.map(r => r.tabla);
+  const colsR = await p.request().query(`
+    SELECT TABLE_NAME AS tabla, COLUMN_NAME AS columna
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_NAME IN (${nombresTablas.map(t => `'${t}'`).join(',')})
+      AND (COLUMN_NAME LIKE '%CN%' OR COLUMN_NAME LIKE '%ARTIC%' OR COLUMN_NAME LIKE '%CODIGO%'
+           OR COLUMN_NAME LIKE '%COD_NAC%' OR COLUMN_NAME LIKE '%NACIONAL%')
+  `).catch(() => ({ recordset: [] }));
+  if (!colsR.recordset.length) return null;
+
+  // 3) Para cada (tabla, columna) candidata: cuántos valores casan de verdad con un CN real
+  // del catálogo (GeneArti) — descarta columnas que por nombre parecían prometedoras pero en
+  // la práctica no contienen CN reales — y cuántos grupos homogéneos tienen MÁS DE 1 CN en
+  // esa tabla (señal de alarma, ver CONTEXTO_FAVORITOS_IA).
+  const candidatas = [];
+  for (const { tabla, columna } of colsR.recordset) {
+    const check = await p.request().query(`
+      SELECT
+        COUNT(*) AS total,
+        COUNT(DISTINCT g.IdGrupoGen) AS grupos_distintos,
+        SUM(CASE WHEN g.IdGrupoGen IS NOT NULL THEN 1 ELSE 0 END) AS coinciden_cn
+      FROM ${tabla} t
+      LEFT JOIN GeneArti g ON CAST(g.IdArticu AS VARCHAR) = CAST(t.${columna} AS VARCHAR)
+    `).catch(() => ({ recordset: [] }));
+    const row = check.recordset[0];
+    if (!row || !row.total || !row.coinciden_cn) continue;
+    if (row.coinciden_cn / row.total < 0.5) continue; // la mayoría ni siquiera son CN reales
+
+    const dupR = await p.request().query(`
+      SELECT COUNT(*) AS n
+      FROM (
+        SELECT g.IdGrupoGen FROM ${tabla} t
+        JOIN GeneArti g ON CAST(g.IdArticu AS VARCHAR) = CAST(t.${columna} AS VARCHAR)
+        GROUP BY g.IdGrupoGen HAVING COUNT(*) > 1
+      ) x
+    `).catch(() => ({ recordset: [{ n: 0 }] }));
+
+    candidatas.push({
+      tabla, columna, n_items: Number(row.total), n_cn_validos: Number(row.coinciden_cn),
+      grupos_distintos: Number(row.grupos_distintos),
+      grupos_con_mas_de_1_cn: Number(dupR.recordset[0]?.n || 0),
+    });
+  }
+  if (!candidatas.length) return null;
+
+  const opciones = new Set(candidatas.map(c => `${c.tabla}.${c.columna}`));
+  const elegido = await resolverAtributoTabla({
+    entidad: 'TABLA_GENERICA', atributo: 'favoritos_fuera_de_listaarticu',
+    candidatos: [], tablasReales: opciones,
+    descripcion: `${CONTEXTO_FAVORITOS_IA} No se encontraron favoritos ni en las 7 listas de ` +
+      'categoría ni en ninguna lista de ListaArticu — puede que esta farmacia use una tabla ' +
+      'propia/personalizada. De las tablas reales de esta instalación con una columna que contiene ' +
+      'códigos nacionales (CN) válidos, ¿cuál es la más probable candidata a representar "los ' +
+      'favoritos"? Formato "tabla.columna — filas, CN válidos, grupos distintos, grupos con >1 CN ' +
+      '[alarma]": ' +
+      candidatas.map(c =>
+        `${c.tabla}.${c.columna} — ${c.n_items} filas, ${c.n_cn_validos} CN válidos, ` +
+        `${c.grupos_distintos} grupos distintos, ${c.grupos_con_mas_de_1_cn} grupos con >1 CN`
+      ).join('; '),
+  })
+  if (!elegido) return null
+  const [tabla, columna] = elegido.split('.')
+  return { tabla, columna }
+}
+
 async function fetchFavoritosActuales() {
   const lcat = getListaCategoria();
   let idUnica = null
+  let tablaGenerica = null
   if (!lcat) {
     idUnica = await resolverListaFavoritosUnica()
-    if (idUnica == null) return new Map();
+    if (idUnica == null) {
+      tablaGenerica = await resolverTablaFavoritosGenerica()
+      if (tablaGenerica == null) return new Map();
+    }
   }
   const p   = await getPool();
+  if (tablaGenerica) {
+    try {
+      const r = await p.request().query(`
+        SELECT t.${tablaGenerica.columna} AS cn, g.IdGrupoGen AS ch
+        FROM ${tablaGenerica.tabla} t
+        JOIN GeneArti g ON CAST(g.IdArticu AS VARCHAR) = CAST(t.${tablaGenerica.columna} AS VARCHAR)
+        WHERE g.IdGrupoGen IS NOT NULL AND g.IdGrupoGen > 0
+      `);
+      const porGH = new Map();
+      for (const row of r.recordset) {
+        if (!porGH.has(row.ch)) porGH.set(row.ch, row.cn);
+      }
+      return porGH;
+    } catch (e) {
+      log.warn('fetchFavoritosActuales (tabla genérica) falló:', e.message);
+      return new Map();
+    }
+  }
   const ids  = lcat ? Object.keys(lcat).join(',') : String(idUnica);
   try {
     const result = await p.request().query(`
@@ -1287,15 +1434,27 @@ async function fetchLabsWizard() {
   return r.recordset.map(r => ({ codigo: r.codigo, n_cns: Number(r.n_cns) }));
 }
 
+// Consulta estrecha primero (nombres esperados — "caso jose"/estándar, rápida y gratis);
+// si no encuentra NADA, cae a listar TODAS las tablas reales de la instalación, para que
+// resolverAtributoTabla pueda ofrecerle a la IA el universo completo en vez de quedarse
+// sin candidatos por culpa de un nombre de tabla inesperado. El caso habitual resuelve en
+// el primer intento sin necesidad de la consulta amplia.
+async function tablasCandidatas(p, nombresEsperados) {
+  const estrecha = await p.request().query(
+    `SELECT name FROM sys.tables WHERE name IN (${nombresEsperados.map(t => `'${t}'`).join(',')})`
+  ).catch(() => ({ recordset: [] }));
+  if (estrecha.recordset.length) return estrecha.recordset;
+  const amplia = await p.request().query(`SELECT name FROM sys.tables`).catch(() => ({ recordset: [] }));
+  return amplia.recordset;
+}
+
 // Devuelve todas las listas de artículos de Farmatic con nombre y cantidad de ítems
 async function fetchListasWizard() {
   const p = await getPool();
   // El nombre de la cabecera de lista varía por instalación: unas Farmatic la llaman
   // "Nombre", otras "Descripcion" (caso real: farmacia jose). Se detecta la columna real
   // en vez de asumir un nombre fijo — mismo patrón que Vendedor.Baja/Cliente.Telefono2.
-  const tbl = await p.request().query(
-    `SELECT name FROM sys.tables WHERE name IN ('ListaArticu', 'Lista', 'Listas')`
-  ).catch(() => ({ recordset: [] }));
+  const tbl = { recordset: await tablasCandidatas(p, ['ListaArticu', 'Lista', 'Listas']) };
   const tablaNombres = await resolverAtributoTabla({
     entidad: 'TABLA', atributo: 'lista_articulos', candidatos: ['ListaArticu', 'Lista', 'Listas'],
     tablasReales: new Set(tbl.recordset.map(r => r.name)),
