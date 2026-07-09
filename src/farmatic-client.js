@@ -36,6 +36,11 @@ function buildConfig() {
       trustServerCertificate: process.env.DB_TRUST_CERT !== 'false',
       instanceName:           instance || undefined,
       trustedConnection:      windowsAuth,
+      // Sin efecto si el servidor resuelve a una única IP (el caso normal) — pero si es un
+      // Listener de Always On Availability Groups con varias IP registradas (una por subred),
+      // hace que el driver las pruebe todas en paralelo en vez de en secuencia. Recomendado
+      // por Microsoft para cualquier conexión contra un Listener de AG, siempre seguro de activar.
+      multiSubnetFailover: true,
     },
     connectionTimeout: 30000,   // era 15 000 — muy ajustado para SQL Server Express en arranque en frío
     requestTimeout:    120000,
@@ -70,6 +75,16 @@ function diagnosticarErrorConexion(err) {
   const codigo = err?.code;
   const sqlNum = err?.originalError?.info?.number;
 
+  if (sqlNum === 19456) {
+    return {
+      mensaje: 'El servidor SQL Server usa Always On Availability Groups y ninguna de las IP configuradas en el Listener corresponde a la subred desde la que te conectas — la conexión se acepta un instante y se corta enseguida.',
+      sugerencias: [
+        'Ya se ha activado MultiSubnetFailover en la conexión (versión 1.0.36+), que ayuda cuando el Listener SÍ tiene una IP válida en tu subred pero el driver probaba las IP en orden equivocado — si el error persiste, es que ninguna IP del Listener está en tu subred.',
+        'Esto requiere una acción del administrador de red/clúster del cliente, no de NextFarma: en el Administrador de Clústeres de Conmutación por Error → Roles → recurso de Nombre de Red del Listener → Propiedades → añadir una IP estática libre dentro del mismo rango que este PC.',
+        'Alternativa más simple si no necesitan failover automático: apuntar el campo "Servidor" directamente al nombre de un nodo concreto del clúster en vez de al nombre del Listener.',
+      ],
+    };
+  }
   if (codigo === 'ELOGIN' || sqlNum === 18456 || sqlNum === 18452) {
     return {
       mensaje: 'Usuario o contraseña de SQL Server incorrectos (o ese login no tiene acceso).',
