@@ -307,6 +307,7 @@ header {
   font-size: 12px;
   padding: 4px 8px;
   border-radius: 4px;
+  white-space: pre-line;
 }
 .result-ok    { color: var(--success); }
 .result-error { color: var(--error); }

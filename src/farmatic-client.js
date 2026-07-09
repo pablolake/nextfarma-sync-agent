@@ -60,6 +60,54 @@ async function closePool() {
   if (pool) { await pool.close(); pool = null; }
 }
 
+// ── Diagnóstico de errores de conexión ──────────────────────────────────────
+// El mensaje crudo del driver `mssql` (p.ej. "Login failed for user 'sa'.") no le dice a
+// un titular sin conocimientos de SQL qué hacer ni a soporte qué mirar primero por
+// teléfono. Traduce los códigos/números más frecuentes vistos en soporte a una causa
+// probable + pasos concretos; si el error no coincide con ninguno, no se inventa nada —
+// se deja que se muestre el mensaje crudo tal cual.
+function diagnosticarErrorConexion(err) {
+  const codigo = err?.code;
+  const sqlNum = err?.originalError?.info?.number;
+
+  if (codigo === 'ELOGIN' || sqlNum === 18456 || sqlNum === 18452) {
+    return {
+      mensaje: 'Usuario o contraseña de SQL Server incorrectos (o ese login no tiene acceso).',
+      sugerencias: [
+        'Revisa que usuario y contraseña sean exactamente los que usa Farmatic (mayúsculas/minúsculas incluidas).',
+        "Comprueba si el login está deshabilitado: en SSMS con Windows Authentication ejecuta " +
+          "SELECT name, is_disabled FROM sys.server_principals WHERE type IN ('S','U').",
+        'Si SQL Server solo permite Windows Authentication (modo no mixto), cualquier usuario SQL (incluido sa) fallará siempre — hay que activar "SQL Server and Windows Authentication mode" en las propiedades del servidor y reiniciar el servicio SQL Server.',
+      ],
+    };
+  }
+  if (sqlNum === 4060 || sqlNum === 4064) {
+    return {
+      mensaje: 'El usuario se autenticó bien, pero no tiene acceso a esa base de datos (o el nombre está mal escrito).',
+      sugerencias: ['Revisa el campo "Base de datos Farmatic" — el nombre debe coincidir exactamente con el de SQL Server.'],
+    };
+  }
+  if (codigo === 'ETIMEOUT' || codigo === 'ESOCKET') {
+    return {
+      mensaje: 'No se pudo alcanzar el servidor SQL Server (tiempo agotado o conexión rechazada).',
+      sugerencias: [
+        'Revisa que servidor/instancia/puerto sean correctos y que el servicio SQL Server esté arrancado.',
+        'Comprueba el firewall del servidor — el puerto de SQL Server (1433 por defecto, o UDP 1434 de SQL Browser si usas instancia con nombre) debe estar abierto para conexiones entrantes.',
+      ],
+    };
+  }
+  if (codigo === 'EINSTLOOKUP') {
+    return {
+      mensaje: 'No se pudo resolver el nombre de instancia de SQL Server (SQL Browser no responde).',
+      sugerencias: ['Comprueba que el servicio "SQL Server Browser" esté arrancado en el servidor, o indica el puerto TCP fijo en vez de depender del nombre de instancia.'],
+    };
+  }
+  if (codigo === 'ENOTFOUND') {
+    return { mensaje: 'No se encuentra el servidor — revisa que el nombre/IP esté bien escrito.', sugerencias: [] };
+  }
+  return null;
+}
+
 const CONSEJO_DB    = () => process.env.DB_CONSEJO || 'Consejo';
 const DESCUENTOS_DIR = () => process.env.DESCUENTOS_DIR || path.join(process.env.USERDATA_PATH || process.cwd(), 'descuentos');
 
@@ -119,13 +167,34 @@ async function discoverSchema() {
     }
 
     const faltantes = TABLAS_ESPERADAS.filter(t => !tablas[t]);
-    schemaCache = { tablas, tablas_esperadas_faltantes: faltantes };
+
+    // Barrido COMPLETO (todas las tablas reales, no solo las esperadas) — para que el
+    // panel admin pueda ofrecer un selector de "tabla.columna" real de esta instalación
+    // concreta al fijar un atributo a mano, en vez de que alguien tenga que adivinar y
+    // escribir el nombre a ciegas. Sin datos, solo metadata (nombre/tipo de columna).
+    let tablasCompleto = {};
+    try {
+      const todasR = await p.request().query(`SELECT name FROM sys.tables`);
+      const nombresTodas = todasR.recordset.map(r => r.name);
+      if (nombresTodas.length) {
+        const colsTodasR = await p.request().query(`
+          SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS
+          WHERE TABLE_NAME IN (${nombresTodas.map(t => `'${t}'`).join(',')})
+        `);
+        for (const t of nombresTodas) tablasCompleto[t] = []
+        for (const row of colsTodasR.recordset) tablasCompleto[row.TABLE_NAME].push({ nombre: row.COLUMN_NAME, tipo: row.DATA_TYPE })
+      }
+    } catch (err) {
+      log.warn('Barrido completo de tablas falló:', err.message);
+    }
+
+    schemaCache = { tablas, tablas_esperadas_faltantes: faltantes, tablas_completo: tablasCompleto };
     if (faltantes.length > 0) {
       log.warn(`Esquema Farmatic: no se encontraron estas tablas esperadas: ${faltantes.join(', ')}`);
     }
   } catch (err) {
     log.warn('discoverSchema falló:', err.message);
-    schemaCache = { tablas: {}, tablas_esperadas_faltantes: TABLAS_ESPERADAS, error: err.message };
+    schemaCache = { tablas: {}, tablas_esperadas_faltantes: TABLAS_ESPERADAS, tablas_completo: {}, error: err.message };
   }
   return schemaCache;
 }
@@ -846,7 +915,16 @@ const CONTEXTO_FAVORITOS_IA =
   'Señal de calidad importante en cualquiera de los tres casos: un favorito real es COMO MUCHO 1 por ' +
   'grupo homogéneo (CH) — si una tabla o lista tiene VARIOS códigos para el mismo grupo, es motivo ' +
   'fuerte para sospechar que NO es una lista de favoritos (podría ser stock, promociones, pedidos, u ' +
-  'otra cosa), y debe bajar la confianza de esa candidata aunque el nombre suene prometedor.'
+  'otra cosa), y debe bajar la confianza de esa candidata aunque el nombre suene prometedor. AVISO de ' +
+  'un falso positivo real ya visto: la tabla "Encargo" (pedidos/encargos de clientes) puede tener por ' +
+  'pura coincidencia códigos válidos con como mucho 1 por grupo (cada encargo es de un producto suelto) ' +
+  'y aun así NO tiene nada que ver con favoritos — es una tabla operativa de pedidos, no de preferencias ' +
+  'del titular. Lo mismo aplica a cualquier tabla de recepciones (Recep/LineaRecep), facturas o ventas: ' +
+  'que los códigos sean válidos y sin duplicados por grupo es NECESARIO pero no SUFICIENTE — hace falta ' +
+  'además que el NOMBRE o el CONTEXTO de la tabla sugiera selección/preferencia manual del titular, no ' +
+  'una operación transaccional normal (pedir, recibir, vender). Ante la duda entre una tabla claramente ' +
+  'operativa (Encargo, Recep, Venta, Factura...) y otra sin ese significado operativo evidente, prefiere ' +
+  'siempre la segunda aunque tenga menos filas.'
 
 // Cuenta, para una lista de ItemListaArticu concreta, cuántos grupos homogéneos tienen más
 // de 1 CN — señal de alarma compartida por resolverListaFavoritosUnica y
@@ -1658,6 +1736,7 @@ async function fetchRGPDDistribucion() {
 module.exports = {
   getPool,
   closePool,
+  diagnosticarErrorConexion,
   fetchProductos,
   fetchVentasAnuales,
   fetchVentasMensuales,

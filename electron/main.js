@@ -103,8 +103,14 @@ async function runSyncOnce() {
     tray?.setToolTip('NextFarma Sync · activo');
   } catch (err) {
     const log = require('../src/logger');
+    const farmatic = require('../src/farmatic-client');
+    const diagnostico = farmatic.diagnosticarErrorConexion(err);
     log.error('Error en sync:', err.message);
-    send('sync-status', { running: false, error: err.message });
+    if (diagnostico) {
+      log.error('Diagnóstico:', diagnostico.mensaje);
+      diagnostico.sugerencias.forEach(s => log.error('  → ' + s));
+    }
+    send('sync-status', { running: false, error: err.message, diagnostico });
     tray?.setToolTip('NextFarma Sync · error');
   } finally {
     isSyncing = false;
@@ -207,7 +213,7 @@ ipcMain.handle('test-db', async (_, dbCfg) => {
   } catch (err) {
     Object.assign(process.env, prevEnv);
     await farmatic.closePool();
-    return { ok: false, error: err.message };
+    return { ok: false, error: err.message, diagnostico: farmatic.diagnosticarErrorConexion(err) };
   }
 });
 

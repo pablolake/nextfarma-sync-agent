@@ -128,7 +128,12 @@ async function testDbConnection() {
     document.getElementById('db-status').textContent = dbCfg.server + (dbCfg.instance ? '\\' + dbCfg.instance : '');
     setBadge('db-badge', 'ok', 'Conectado');
   } else {
-    showResult('db-test-result', `✗ ${res.error}`, 'error');
+    let texto = `✗ ${res.error}`;
+    if (res.diagnostico) {
+      texto += `\n\n${res.diagnostico.mensaje}`;
+      for (const s of res.diagnostico.sugerencias) texto += `\n• ${s}`;
+    }
+    showResult('db-test-result', texto, 'error');
     setBadge('db-badge', 'error', 'Error');
   }
 }
