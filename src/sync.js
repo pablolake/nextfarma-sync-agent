@@ -78,6 +78,30 @@ async function runSync(opts = {}) {
     return { ...resultados, elapsed: '0s' };
   }
 
+  // ── PASO 1a: Comprobar conexión a Farmatic UNA sola vez ──────────────
+  // Cada paso de abajo (ventas, catálogo, recepciones, favoritos, vendedores…) llama a
+  // getPool() por su cuenta y solo atrapa el error para avisar y seguir con el siguiente
+  // paso — si la conexión está mal (contraseña, cuenta bloqueada…), esto hacía que UN solo
+  // ciclo de sync generara ~20 intentos de login fallidos seguidos en segundos (uno por
+  // paso), y eso cada 15 minutos indefinidamente. Real: así es como se disparó un bloqueo
+  // de la cuenta sa de un cliente, tumbando también su Farmatic. Con esta comprobación
+  // única al principio, si falla, se corta el ciclo entero aquí — un solo intento de login
+  // por sync, no veinte.
+  step('db', 'Conectando con la base de datos de Farmatic…', 'running');
+  try {
+    await farmatic.getPool();
+    step('db', 'Conexión con Farmatic OK', 'ok');
+  } catch (e) {
+    const diagnostico = farmatic.diagnosticarErrorConexion(e);
+    err('No se pudo conectar con la base de datos de Farmatic: ' + e.message);
+    if (diagnostico) {
+      err(diagnostico.mensaje);
+      diagnostico.sugerencias.forEach(s => err('  → ' + s));
+    }
+    step('db', 'Sin conexión con Farmatic — sync cancelado', 'error');
+    return { ...resultados, elapsed: ((Date.now() - t0) / 1000).toFixed(1) + 's' };
+  }
+
   // Carga el mapeo de columnas/tablas ya resuelto para este tenant (ver
   // resolverAtributoColumna en farmatic-client.js) — una vez por sync, en memoria, así
   // lo ya resuelto (por heurística, IA o a mano desde el panel de admin) no se vuelve a
