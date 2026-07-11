@@ -1359,6 +1359,66 @@ function getCategoriaLista() {
 // creado sus listas o no sin pedirle capturas de pantalla al cliente). Ahora se devuelve
 // el motivo explícito para que sembrarFavoritosReales() lo propague y sync.js lo reporte
 // con warn() — mismo mecanismo que ya usan los avisos de ventas (last_sync_warnings_detalle).
+// Valor SQL seguro para rellenar una columna NOT NULL sin default, según su tipo — evita
+// tener que adivinar de antemano el nombre de cada columna "rara" que pueda tener una
+// instalación real de Farmatic (ver columnasObligatorias más abajo). Devuelve null para
+// tipos que no sabemos rellenar razonablemente (binary, xml, tipos definidos por el usuario…)
+// — en ese caso se deja que el INSERT falle y se reporte, mejor que adivinar mal.
+function valorSeguroPorTipo(tipoSql) {
+  const t = String(tipoSql || '').toLowerCase();
+  if (['int', 'smallint', 'tinyint', 'bigint', 'bit', 'decimal', 'numeric', 'float', 'real', 'money', 'smallmoney'].includes(t)) return '0';
+  if (['datetime', 'datetime2', 'date', 'smalldatetime', 'datetimeoffset'].includes(t)) return 'GETDATE()';
+  if (['uniqueidentifier'].includes(t)) return 'NEWID()';
+  if (['char', 'varchar', 'nchar', 'nvarchar', 'text', 'ntext'].includes(t)) return "''";
+  return null;
+}
+
+// A partir de INFORMATION_SCHEMA.COLUMNS (con IS_NULLABLE/COLUMN_DEFAULT), qué columnas hay
+// que rellenar sí o sí en un INSERT — NOT NULL, sin default, y no ya cubiertas a mano
+// (identity, la columna de nombre, o las que ya se van a insertar explícitamente). Sustituye
+// a la lista fija de nombres "conocidos" (Fecha/NumElem/Tipo/EnviarGrupo) que antes había que
+// ampliar a mano — y con ella, sacar una nueva versión — cada vez que una farmacia real tenía
+// una columna NOT NULL distinta.
+function columnasObligatorias(colsInfo, yaCubiertas) {
+  return colsInfo
+    .filter(c => c.IS_NULLABLE === 'NO' && !c.COLUMN_DEFAULT && !yaCubiertas.has(c.COLUMN_NAME))
+    .map(c => ({ nombre: c.COLUMN_NAME, valor: valorSeguroPorTipo(c.DATA_TYPE) }))
+    .filter(c => c.valor != null);
+}
+
+// Intenta el INSERT y, si SQL Server lo rechaza por una columna NOT NULL que
+// columnasObligatorias no había detectado (metadata desactualizada, columna añadida después
+// del barrido de esquema…), parsea el nombre de esa columna del propio mensaje de error de
+// SQL Server ("Cannot insert the value NULL into column 'X'…") y reintenta UNA vez añadiéndola
+// — red de seguridad además del chequeo proactivo, no en vez de él.
+async function insertarConReintentoPorColumna(p, tabla, colsInfo, columnasBase, valoresBase, params, opts = {}) {
+  const { outputCol, guardSql } = opts;
+  let columnas = [...columnasBase];
+  let valores  = [...valoresBase];
+  const yaIncluidas = new Set(columnas);
+  for (let intento = 0; intento < 2; intento++) {
+    const req = p.request();
+    for (const prm of params) req.input(prm.nombre, prm.tipo, prm.valor);
+    try {
+      const r = await req.query(
+        `${guardSql || ''}INSERT INTO ${tabla} (${columnas.join(', ')})${outputCol ? ` OUTPUT INSERTED.${outputCol} AS id` : ''} VALUES (${valores.join(', ')})`
+      );
+      return { ok: true, id: r.recordset?.[0]?.id };
+    } catch (err) {
+      const colFaltante = /column '([^']+)'/i.exec(err.message)?.[1];
+      const info = colFaltante && colsInfo.find(c => c.COLUMN_NAME === colFaltante);
+      const valorExtra = info && valorSeguroPorTipo(info.DATA_TYPE);
+      if (intento === 0 && colFaltante && !yaIncluidas.has(colFaltante) && valorExtra != null) {
+        columnas.push(colFaltante);
+        valores.push(valorExtra);
+        yaIncluidas.add(colFaltante);
+        continue;
+      }
+      return { ok: false, error: err.message };
+    }
+  }
+}
+
 // Genérico: crea (si faltan) las listas de un "esquema" bucket→env var — usado tanto para
 // las 7 de categoría (CATEGORIA_ENV) como para las 3 de color de margen (COLOR_ENV). Mismo
 // nombre "NextFarma - {BUCKET}" en ambos casos, así que reutilizar esto en vez de duplicar
@@ -1375,9 +1435,10 @@ async function asegurarListas(envMap) {
     return { omitida: true, motivo };
   }
   const colsR = await p.request().query(
-    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'ListaArticu'`
+    `SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'ListaArticu'`
   ).catch(() => ({ recordset: [] }));
-  const cols = new Set(colsR.recordset.map(r => String(r.COLUMN_NAME)));
+  const colsInfo = colsR.recordset;
+  const cols = new Set(colsInfo.map(r => String(r.COLUMN_NAME)));
   const colNombre = await resolverAtributoColumna({
     entidad: 'LISTA_ARTICU', atributo: 'nombre', candidatos: ['Nombre', 'Descripcion'],
     columnasReales: cols, descripcion: 'Columna de ListaArticu con el nombre/descripción visible de cada lista de artículos.',
@@ -1398,30 +1459,28 @@ async function asegurarListas(envMap) {
 
   // ListaArticu suele tener más columnas que Nombre/Descripcion (caso real visto en Jose-2:
   // Fecha, NumElem, Tipo, EnviarGrupo) — el barrido de esquema no captura si son NOT NULL sin
-  // default, así que en vez de asumir que están todas permitidas a NULL, se rellenan con un
-  // valor seguro cuando existen. Evita que el INSERT falle en silencio en instalaciones reales
-  // solo porque tienen más columnas que la tabla mínima usada al probar esto contra Docker.
-  const EXTRAS_SEGUROS = { Fecha: 'GETDATE()', NumElem: '0', Tipo: '0', EnviarGrupo: '0' };
-  const extrasPresentes = Object.keys(EXTRAS_SEGUROS).filter(c => cols.has(c));
-  const columnasInsert  = [colNombre, ...extrasPresentes].join(', ');
-  const valoresInsert   = ['@nombre', ...extrasPresentes.map(c => EXTRAS_SEGUROS[c])].join(', ');
+  // default, así que en vez de asumir que solo Nombre/Descripcion son obligatorias, se
+  // detectan directamente por metadata (columnasObligatorias) y se rellenan con un valor
+  // seguro según su tipo. El reintento por error (insertarConReintentoPorColumna) cubre
+  // además cualquier NOT NULL que la metadata no reflejara.
+  const obligatorias   = columnasObligatorias(colsInfo, new Set(['IdLista', colNombre]));
+  const columnasInsert = [colNombre, ...obligatorias.map(c => c.nombre)];
+  const valoresInsert  = ['@nombre', ...obligatorias.map(c => c.valor)];
 
   const creadas = [];
   const fallos = [];
   const faltantes = Object.keys(envMap).filter(bucket => !process.env[envMap[bucket]]);
   for (const bucket of faltantes) {
-    try {
-      const r = await p.request()
-        .input('nombre', sql.VarChar, `NextFarma - ${bucket}`)
-        .query(`INSERT INTO ListaArticu (${columnasInsert}) OUTPUT INSERTED.IdLista AS id VALUES (${valoresInsert})`);
-      const nuevoId = r.recordset[0]?.id;
-      if (nuevoId) {
-        creadas.push({ categoria: bucket, lista_id: nuevoId });
-        process.env[envMap[bucket]] = String(nuevoId);
-      }
-    } catch (err) {
-      log.warn(`No se pudo crear la lista de ${bucket}:`, err.message);
-      fallos.push(`${bucket}: ${err.message}`);
+    const resultado = await insertarConReintentoPorColumna(
+      p, 'ListaArticu', colsInfo, columnasInsert, valoresInsert,
+      [{ nombre: 'nombre', tipo: sql.VarChar, valor: `NextFarma - ${bucket}` }], { outputCol: 'IdLista' }
+    );
+    if (resultado.ok && resultado.id) {
+      creadas.push({ categoria: bucket, lista_id: resultado.id });
+      process.env[envMap[bucket]] = String(resultado.id);
+    } else if (!resultado.ok) {
+      log.warn(`No se pudo crear la lista de ${bucket}:`, resultado.error);
+      fallos.push(`${bucket}: ${resultado.error}`);
     }
   }
 
@@ -1453,6 +1512,19 @@ async function sembrarFavoritosEnListas(asegurarFn, bucketPorChMap, favoritosRea
 
   const favoritosPorCh = favoritosReales instanceof Map ? favoritosReales : new Map();
 
+  // Igual que en ListaArticu: se detectan por metadata las columnas de ItemListaArticu que
+  // haya además de XItem_IdLista/XItem_IdArticu y sean NOT NULL sin default, en vez de asumir
+  // que esas dos son las únicas en cualquier instalación real.
+  const itemColsR = favoritosPorCh.size
+    ? await p.request().query(
+        `SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'ItemListaArticu'`
+      ).catch(() => ({ recordset: [] }))
+    : { recordset: [] };
+  const itemColsInfo = itemColsR.recordset;
+  const itemObligatorias = columnasObligatorias(itemColsInfo, new Set(['XItem_IdLista', 'XItem_IdArticu']));
+  const itemColumnasBase = ['XItem_IdLista', 'XItem_IdArticu', ...itemObligatorias.map(c => c.nombre)];
+  const itemValoresBase  = ['@lista', '@cn', ...itemObligatorias.map(c => c.valor)];
+
   let favoritosCreados = 0;
   let favoritosSinLista = 0;
   const fallosSiembra = [];
@@ -1464,18 +1536,16 @@ async function sembrarFavoritosEnListas(asegurarFn, bucketPorChMap, favoritosRea
     const bucket = bucketPorChMap.get(ch) || bucketFallback;
     const listaId = listaIdPorBucket.get(bucket);
     if (!listaId) { favoritosSinLista++; continue; }
-    try {
-      await p.request()
-        .input('lista', sql.Int, listaId)
-        .input('cn',    sql.Int, cn)
-        .query(`
-          IF NOT EXISTS (SELECT 1 FROM ItemListaArticu WHERE XItem_IdLista = @lista AND XItem_IdArticu = @cn)
-          INSERT INTO ItemListaArticu (XItem_IdLista, XItem_IdArticu) VALUES (@lista, @cn)
-        `);
+    const resultado = await insertarConReintentoPorColumna(
+      p, 'ItemListaArticu', itemColsInfo, itemColumnasBase, itemValoresBase,
+      [{ nombre: 'lista', tipo: sql.Int, valor: listaId }, { nombre: 'cn', tipo: sql.Int, valor: cn }],
+      { guardSql: 'IF NOT EXISTS (SELECT 1 FROM ItemListaArticu WHERE XItem_IdLista = @lista AND XItem_IdArticu = @cn) ' }
+    );
+    if (resultado.ok) {
       favoritosCreados++;
-    } catch (err) {
-      log.warn(`No se pudo sembrar favorito real de CH ${ch} (${etiqueta}):`, err.message);
-      fallosSiembra.push(`CH ${ch}: ${err.message}`);
+    } else {
+      log.warn(`No se pudo sembrar favorito real de CH ${ch} (${etiqueta}):`, resultado.error);
+      fallosSiembra.push(`CH ${ch}: ${resultado.error}`);
     }
   }
   if (creadas.length) log.info(`✓ Listas de ${etiqueta} creadas en Farmatic: ${creadas.length}`);
