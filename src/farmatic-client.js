@@ -760,7 +760,7 @@ async function fetch4DBDescuentos() {
 // donde hay riesgo de falso positivo por substring (p.ej. "INCENTIVADOS" no debe
 // confundirse con "INCENTIVADOS ESTRELLA", ni "RESTO" con "RESTO DESCUENTO").
 const PATRONES_NOMBRE_LISTA = [
-  ['LIST_INCENTIVADOS_STAR', [/estrella/i]],
+  ['LIST_INCENTIVADOS_STAR', [/^estrella$/i, /^star$/i]],
   ['LIST_INCENTIVADOS',      [/^incentivados?$/i]],
   ['LIST_MAX_ROT_A',         [/rotaci[oó]n\s*a\b/i]],
   ['LIST_MAX_ROT_B',         [/rotaci[oó]n\s*b\b/i]],
