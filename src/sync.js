@@ -185,6 +185,43 @@ async function runSync(opts = {}) {
     log.warn('Barrido de esquema omitido:', e.message);
   }
 
+  // ── Fase A: favoritos reales + creación de listas ────────────────────
+  // Lo primero que se intenta (antes de leer/subir nada de ventas): detectar el favorito
+  // real de cada GH (7 listas si están configuradas, o la lista única de favoritos por
+  // IA si no) y, si hay escritura activada, asegurar las 7 listas de categoría en
+  // Farmatic y sembrar cada una con ese favorito real — nunca con "más vendido" aquí,
+  // eso es la fase B, al final del sync, una vez subidas las ventas de este ciclo.
+  let favActuales = new Map();
+  try {
+    favActuales = await farmatic.fetchFavoritosActuales();
+    if (favActuales.size > 0) {
+      const cambios = [];
+      for (const [ch, cn] of favActuales) cambios.push({ ch, cn_favorito: cn });
+      const r = await api.request('/api/sync/favoritos-historico', { method: 'POST', body: { cambios } });
+      log.info(`✓ Favoritos histórico: ${r.upserts} registros actualizados`);
+    }
+  } catch (e) {
+    log.warn('Favoritos histórico omitido:', e.message);
+  }
+
+  try {
+    const cfgTenant = await api.obtenerConfigSync();
+    if (cfgTenant.farmatic_write_enabled && cfgTenant.farmatic_autocrear_listas) {
+      const categorias = await api.obtenerCategoriasActuales();
+      const resultado = await farmatic.sembrarFavoritosReales(categorias, favActuales);
+      if (resultado?.creadas?.length) {
+        listasCreadas = Object.fromEntries(resultado.creadas.map(c => [c.categoria, c.lista_id]));
+        // El backend espera { listas, favoritos_creados } — antes se mandaba el objeto
+        // tal cual y el backend siempre respondía 400 "listas[] requerido": la alerta al
+        // titular nunca se llegó a crear. Detectado en la primera prueba real contra Docker.
+        await api.reportarListasCreadas({ listas: resultado.creadas, favoritos_creados: resultado.favoritos_creados });
+        log.info(`✓ Listas de favoritos creadas en Farmatic: ${resultado.creadas.length}`);
+      }
+    }
+  } catch (e) {
+    log.warn('Auto-creación de listas (fase A) omitida:', e.message);
+  }
+
   const anioActual   = new Date().getFullYear();
   const anioAnterior = anioActual - 1;
   let todasVentas    = [];
@@ -380,22 +417,6 @@ async function runSync(opts = {}) {
     log.warn('Favoritos omitidos:', e.message);
   }
 
-  // Declarado aquí (no dentro del try de abajo) para poder reutilizarlo más tarde en la
-  // auto-creación de listas — sembrar con el favorito real ya leído, sin repetir la
-  // búsqueda (potencialmente cara, por tandas con IA) una segunda vez en el mismo ciclo.
-  let favActuales = new Map();
-  try {
-    favActuales = await farmatic.fetchFavoritosActuales();
-    if (favActuales.size > 0) {
-      const cambios = [];
-      for (const [ch, cn] of favActuales) cambios.push({ ch, cn_favorito: cn });
-      const r = await api.request('/api/sync/favoritos-historico', { method: 'POST', body: { cambios } });
-      log.info(`✓ Favoritos histórico: ${r.upserts} registros actualizados`);
-    }
-  } catch (e) {
-    log.warn('Favoritos histórico omitido:', e.message);
-  }
-
   try {
     const curMes  = new Date().getMonth() + 1;
     const curAnio = new Date().getFullYear();
@@ -532,34 +553,22 @@ async function runSync(opts = {}) {
     log.warn('Alta de empleados nuevos omitida:', e.message);
   }
 
-  // Auto-creación de listas de categoría con nuestro formato. Doble candado, por defecto
-  // todo apagado: solo corre si el tenant tiene farmatic_write_enabled Y
-  // farmatic_autocrear_listas activos en Railway (ver [[project_sync_electron]] — jose no
-  // la necesita y se queda desactivada como el resto hasta que se active a mano en algún
-  // tenant piloto). YA NO exige que Farmatic tenga cero listas — el titular puede tener
-  // otras listas propias (p.ej. una única "Favoritos") y aun así queremos que las 7
-  // categorías de NextFarma existan siempre en su Farmatic; el favorito real ya detectado
-  // (favActuales, de esa lista existente si la hay) se usa como semilla con prioridad
-  // sobre el "más vendido", y la categoría es siempre la que calcula el propio SaaS.
+  // Fase B de la auto-creación de listas (ver fase A al principio del sync): con las
+  // ventas de este ciclo ya subidas, se rellenan con "más vendido" los grupos que la fase
+  // A dejó sin favorito real. Mismo doble candado (farmatic_write_enabled +
+  // farmatic_autocrear_listas) — si en la fase A no se llegaron a crear/asegurar las
+  // listas (escritura desactivada, o esquema no reconocible), getCategoriaLista() sigue
+  // sin nada y esto no hace nada.
   try {
-    if (!farmatic.getCategoriaLista()) {
+    if (farmatic.getCategoriaLista()) {
       const cfgTenant = await api.obtenerConfigSync();
       if (cfgTenant.farmatic_write_enabled && cfgTenant.farmatic_autocrear_listas) {
         const categorias = await api.obtenerCategoriasActuales();
-        const resultado = await farmatic.crearListasCategoriaYFavoritosIniciales(categorias, favActuales);
-        if (resultado?.creadas?.length) {
-          listasCreadas = Object.fromEntries(resultado.creadas.map(c => [c.categoria, c.lista_id]));
-          // El backend espera { listas, favoritos_creados } — crearListasCategoriaYFavoritosIniciales()
-          // devuelve { creadas, favoritos_creados }. Antes se mandaba el objeto tal cual y el
-          // backend siempre respondía 400 "listas[] requerido": la alerta al titular nunca se
-          // llegó a crear. Detectado en la primera prueba real de este flujo contra Docker.
-          await api.reportarListasCreadas({ listas: resultado.creadas, favoritos_creados: resultado.favoritos_creados });
-          log.info(`✓ Listas de favoritos creadas en Farmatic: ${resultado.creadas.length}`);
-        }
+        await farmatic.completarFavoritosConMasVendido(categorias);
       }
     }
   } catch (e) {
-    log.warn('Auto-creación de listas omitida:', e.message);
+    log.warn('Completar favoritos con más vendido omitido:', e.message);
   }
 
   step('cronicos', 'Crónicos y encargos sincronizados', 'ok');

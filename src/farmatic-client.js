@@ -1242,7 +1242,7 @@ async function fetchVendedoresFarmatic() {
 
 // Da de alta en Farmatic (tabla Vendedor) a un empleado creado desde NextFarma que
 // todavía no existía allí. Mismo criterio defensivo que
-// crearListasCategoriaYFavoritosIniciales(): si IdVendedor no es autonumérico, no se
+// asegurarListasCategoria(): si IdVendedor no es autonumérico, no se
 // adivina un id a mano — se aborta ese alta concreta y se reporta como error (queda
 // visible para el titular, no se pierde en silencio). El nombre de columna se resuelve
 // con el mismo mapeo persistente que el resto del esquema; los apellidos por separado
@@ -1318,15 +1318,14 @@ function getCategoriaLista() {
   return Object.keys(map).length ? map : null;
 }
 
-// Crea en Farmatic (ListaArticu/ItemListaArticu) las listas de categoría que falten y
-// siembra un favorito inicial por grupo homogéneo = el CN con más unidades vendidas en
-// los últimos 12 meses. SOLO se debe llamar cuando ya se ha confirmado (fetchListasWizard
-// vacío) que esta instalación no tiene ninguna lista real — si tuviera alguna sin mapear
-// no se toca nada, eso requiere revisión manual, no autocreación. Nunca pisa una categoría
-// que ya tenga env var configurada. Cualquier duda sobre el esquema real (tabla, columna
-// de nombre, autonumérico) aborta sin escribir nada — mejor no crear nada que crear algo
-// mal en una base de datos de producción real.
-async function crearListasCategoriaYFavoritosIniciales(categoriasActuales, favoritosReales) {
+// Asegura que las 7 listas de categoría existan en Farmatic (ListaArticu), creando las
+// que falten — idempotente, no vuelve a crear si ya existen (mira el env var antes).
+// Cualquier duda sobre el esquema real (tabla, columna de nombre, autonumérico) aborta
+// sin escribir nada — mejor no crear nada que crear algo mal en una BBDD de producción
+// real. Devuelve el id de lista de CADA categoría (recién creada o ya existente antes),
+// para que tanto la siembra de favoritos reales (fase A) como la de "más vendido" (fase
+// B, al final del sync) puedan usarlas sin tener que volver a crear nada.
+async function asegurarListasCategoria() {
   const p = await getPool();
 
   const tblR = await p.request().query(`SELECT name FROM sys.tables WHERE name = 'ListaArticu'`)
@@ -1355,10 +1354,8 @@ async function crearListasCategoriaYFavoritosIniciales(categoriasActuales, favor
     return null;
   }
 
-  const faltantes = Object.keys(CATEGORIA_ENV).filter(cat => !process.env[CATEGORIA_ENV[cat]]);
-  if (!faltantes.length) return null;
-
   const creadas = [];
+  const faltantes = Object.keys(CATEGORIA_ENV).filter(cat => !process.env[CATEGORIA_ENV[cat]]);
   for (const categoria of faltantes) {
     try {
       const r = await p.request()
@@ -1373,7 +1370,69 @@ async function crearListasCategoriaYFavoritosIniciales(categoriasActuales, favor
       log.warn(`No se pudo crear la lista de ${categoria}:`, err.message);
     }
   }
-  if (!creadas.length) return null;
+
+  const listaIdPorCategoria = new Map();
+  for (const categoria of Object.keys(CATEGORIA_ENV)) {
+    const id = process.env[CATEGORIA_ENV[categoria]];
+    if (id) listaIdPorCategoria.set(categoria, parseInt(id, 10));
+  }
+  return { creadas, listaIdPorCategoria };
+}
+
+// Fase A — al PRINCIPIO del sync (antes de leer/subir ventas de este ciclo): asegura las
+// listas y siembra cada una SOLO con el favorito REAL ya detectado (favoritosReales, de
+// fetchFavoritosActuales) — es la elección de verdad del titular, nunca "más vendido"
+// aquí. Los grupos sin favorito real se dejan para la fase B, al final del sync.
+async function sembrarFavoritosReales(categoriasActuales, favoritosReales) {
+  const aseguradas = await asegurarListasCategoria();
+  if (!aseguradas) return null;
+  const { creadas, listaIdPorCategoria } = aseguradas;
+  const p = await getPool();
+
+  const favoritosPorCh = favoritosReales instanceof Map ? favoritosReales : new Map();
+  const categoriaPorCh = new Map((categoriasActuales || []).map(r => [Number(r.ch), r.categoria]));
+
+  let favoritosCreados = 0;
+  for (const [ch, cn] of favoritosPorCh) {
+    const listaId = listaIdPorCategoria.get(categoriaPorCh.get(ch));
+    if (!listaId) continue;
+    try {
+      await p.request()
+        .input('lista', sql.Int, listaId)
+        .input('cn',    sql.Int, cn)
+        .query(`
+          IF NOT EXISTS (SELECT 1 FROM ItemListaArticu WHERE XItem_IdLista = @lista AND XItem_IdArticu = @cn)
+          INSERT INTO ItemListaArticu (XItem_IdLista, XItem_IdArticu) VALUES (@lista, @cn)
+        `);
+      favoritosCreados++;
+    } catch (err) {
+      log.warn(`No se pudo sembrar favorito real de CH ${ch}:`, err.message);
+    }
+  }
+  if (creadas.length) log.info(`✓ Listas de categoría creadas en Farmatic: ${creadas.length}`);
+  if (favoritosCreados > 0) log.info(`✓ Favoritos reales sembrados: ${favoritosCreados}`);
+  return { creadas, favoritos_creados: favoritosCreados };
+}
+
+// Fase B — al FINAL del sync (con las ventas de este ciclo ya subidas): para los grupos
+// que sigan sin ningún favorito en su lista de categoría (ni real de fase A, ni puesto a
+// mano antes), se rellena con el más vendido — calculado en vivo contra el propio
+// Farmatic (no depende de que nuestra copia sincronizada esté al día), con el mismo
+// filtro anti-ético de siempre. Nunca pisa un favorito ya existente en la lista.
+async function completarFavoritosConMasVendido(categoriasActuales) {
+  const lcat = getListaCategoria();
+  if (!lcat) return null;
+  const p = await getPool();
+  const listaIds = Object.keys(lcat).map(Number).filter(Number.isFinite);
+  if (!listaIds.length) return null;
+
+  const yaCubiertosR = await p.request().query(`
+    SELECT DISTINCT g.IdGrupoGen AS ch
+    FROM ItemListaArticu i
+    JOIN GeneArti g ON CAST(g.IdArticu AS VARCHAR) = CAST(i.XItem_IdArticu AS VARCHAR)
+    WHERE i.XItem_IdLista IN (${listaIds.join(',')}) AND g.IdGrupoGen IS NOT NULL
+  `).catch(() => ({ recordset: [] }));
+  const yaCubiertos = new Set(yaCubiertosR.recordset.map(r => Number(r.ch)));
 
   const fac = await detectarFiltroFacturada(p);
   const excl = excludedVendors();
@@ -1401,41 +1460,32 @@ async function crearListasCategoriaYFavoritosIniciales(categoriasActuales, favor
       GROUP BY g.IdGrupoGen, lv.Codigo
     ) t
     WHERE rn = 1
-  `).catch(err => { log.warn('Top CN por grupo (auto-creación) falló:', err.message); return { recordset: [] }; });
+  `).catch(err => { log.warn('Top CN por grupo (completar favoritos) falló:', err.message); return { recordset: [] }; });
 
-  const topPorCh          = new Map(topR.recordset.map(r => [Number(r.ch), Number(r.cn)]));
-  const categoriaPorCh    = new Map((categoriasActuales || []).map(r => [Number(r.ch), r.categoria]));
-  const listaIdPorCategoria = new Map(creadas.map(c => [c.categoria, c.lista_id]));
+  const categoriaPorCh = new Map((categoriasActuales || []).map(r => [Number(r.ch), r.categoria]));
+  const listaIdPorCategoria = new Map(Object.entries(lcat).map(([id, categoria]) => [categoria, parseInt(id, 10)]));
 
-  // El favorito real de esta farmacia (ya detectado en fetchFavoritosActuales — su propia
-  // lista existente, si la tiene) manda siempre sobre el "más vendido": es su elección de
-  // verdad, no una suposición nuestra. El más vendido solo rellena los GH de los que no
-  // tenemos ningún favorito real conocido.
-  const favoritosPorCh = favoritosReales instanceof Map ? favoritosReales : new Map();
-  const chsAConsiderar = new Set([...topPorCh.keys(), ...favoritosPorCh.keys()]);
-
-  let favoritosCreados = 0;
-  for (const ch of chsAConsiderar) {
-    const cn = favoritosPorCh.get(ch) ?? topPorCh.get(ch);
-    if (!cn) continue;
+  let completados = 0;
+  for (const row of topR.recordset) {
+    const ch = Number(row.ch);
+    if (yaCubiertos.has(ch)) continue;
     const listaId = listaIdPorCategoria.get(categoriaPorCh.get(ch));
     if (!listaId) continue;
     try {
       await p.request()
         .input('lista', sql.Int, listaId)
-        .input('cn',    sql.Int, cn)
+        .input('cn',    sql.Int, Number(row.cn))
         .query(`
           IF NOT EXISTS (SELECT 1 FROM ItemListaArticu WHERE XItem_IdLista = @lista AND XItem_IdArticu = @cn)
           INSERT INTO ItemListaArticu (XItem_IdLista, XItem_IdArticu) VALUES (@lista, @cn)
         `);
-      favoritosCreados++;
+      completados++;
     } catch (err) {
-      log.warn(`No se pudo sembrar favorito inicial de CH ${ch}:`, err.message);
+      log.warn(`No se pudo completar favorito de CH ${ch}:`, err.message);
     }
   }
-
-  log.info(`✓ Listas de categoría creadas en Farmatic: ${creadas.length}, favoritos iniciales: ${favoritosCreados}`);
-  return { creadas, favoritos_creados: favoritosCreados };
+  if (completados > 0) log.info(`✓ Favoritos completados con más vendido: ${completados}`);
+  return { favoritos_completados: completados };
 }
 
 async function procesarCambiosPendientes(cambios) {
@@ -1830,7 +1880,8 @@ module.exports = {
   setMapeoEsquema,
   resolverAtributoColumna,
   resolverAtributoTabla,
-  crearListasCategoriaYFavoritosIniciales,
+  sembrarFavoritosReales,
+  completarFavoritosConMasVendido,
   discoverSchema,
   discoverDataQuality,
   resetSchemaCache,
