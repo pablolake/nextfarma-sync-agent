@@ -198,28 +198,50 @@ async function runSync(opts = {}) {
       const cambios = [];
       for (const [ch, cn] of favActuales) cambios.push({ ch, cn_favorito: cn });
       const r = await api.request('/api/sync/favoritos-historico', { method: 'POST', body: { cambios } });
-      log.info(`✓ Favoritos histórico: ${r.upserts} registros actualizados`);
+      ok(`Favoritos histórico: ${r.upserts} registros actualizados`);
     }
   } catch (e) {
-    log.warn('Favoritos histórico omitido:', e.message);
+    warn('Favoritos histórico omitido: ' + e.message);
   }
 
+  // Fase A reporta con ok()/warn() (no log.info/log.warn) para que el resultado — éxito,
+  // motivo de omisión, o fallos parciales — llegue a last_sync_warnings_detalle y sea
+  // visible desde el panel de admin sin depender del log local del agente (antes de esto,
+  // un fallo aquí era invisible fuera de la máquina del cliente — ver caso Jose-2).
   try {
     const cfgTenant = await api.obtenerConfigSync();
     if (cfgTenant.farmatic_write_enabled && cfgTenant.farmatic_autocrear_listas) {
       const categorias = await api.obtenerCategoriasActuales();
       const resultado = await farmatic.sembrarFavoritosReales(categorias, favActuales);
-      if (resultado?.creadas?.length) {
-        listasCreadas = Object.fromEntries(resultado.creadas.map(c => [c.categoria, c.lista_id]));
-        // El backend espera { listas, favoritos_creados } — antes se mandaba el objeto
-        // tal cual y el backend siempre respondía 400 "listas[] requerido": la alerta al
-        // titular nunca se llegó a crear. Detectado en la primera prueba real contra Docker.
-        await api.reportarListasCreadas({ listas: resultado.creadas, favoritos_creados: resultado.favoritos_creados });
-        log.info(`✓ Listas de favoritos creadas en Farmatic: ${resultado.creadas.length}`);
+      if (resultado?.omitida) {
+        warn('Auto-creación de listas (fase A) omitida: ' + resultado.motivo);
+      } else {
+        if (resultado.creadas.length) {
+          listasCreadas = Object.fromEntries(resultado.creadas.map(c => [c.categoria, c.lista_id]));
+          // El backend espera { listas, favoritos_creados } — antes se mandaba el objeto
+          // tal cual y el backend siempre respondía 400 "listas[] requerido": la alerta al
+          // titular nunca se llegó a crear. Detectado en la primera prueba real contra Docker.
+          await api.reportarListasCreadas({ listas: resultado.creadas, favoritos_creados: resultado.favoritos_creados });
+          ok(`Listas de favoritos creadas en Farmatic: ${resultado.creadas.length}`);
+        }
+        if (resultado.fallos_creacion?.length) {
+          warn(`No se pudieron crear ${resultado.fallos_creacion.length} listas de categoría: ${resultado.fallos_creacion.join('; ')}`);
+        }
+        if (resultado.favoritos_creados > 0) {
+          ok(`Favoritos reales sembrados en Farmatic: ${resultado.favoritos_creados} de ${resultado.favoritos_totales}`);
+        } else if (resultado.favoritos_totales > 0) {
+          warn(`Favoritos reales detectados (${resultado.favoritos_totales}) pero ninguno se sembró en Farmatic`);
+        }
+        if (resultado.favoritos_sin_lista > 0) {
+          warn(`${resultado.favoritos_sin_lista} favoritos reales sin lista de categoría disponible donde guardarse`);
+        }
+        if (resultado.fallos_siembra?.length) {
+          warn(`Fallos al sembrar ${resultado.fallos_siembra.length} favoritos reales: ${resultado.fallos_siembra.slice(0, 5).join('; ')}${resultado.fallos_siembra.length > 5 ? '…' : ''}`);
+        }
       }
     }
   } catch (e) {
-    log.warn('Auto-creación de listas (fase A) omitida:', e.message);
+    warn('Auto-creación de listas (fase A) omitida: ' + e.message);
   }
 
   const anioActual   = new Date().getFullYear();
@@ -564,11 +586,14 @@ async function runSync(opts = {}) {
       const cfgTenant = await api.obtenerConfigSync();
       if (cfgTenant.farmatic_write_enabled && cfgTenant.farmatic_autocrear_listas) {
         const categorias = await api.obtenerCategoriasActuales();
-        await farmatic.completarFavoritosConMasVendido(categorias);
+        const resultado = await farmatic.completarFavoritosConMasVendido(categorias);
+        if (resultado?.favoritos_completados > 0) {
+          ok(`Favoritos completados con más vendido: ${resultado.favoritos_completados}`);
+        }
       }
     }
   } catch (e) {
-    log.warn('Completar favoritos con más vendido omitido:', e.message);
+    warn('Completar favoritos con más vendido omitido: ' + e.message);
   }
 
   step('cronicos', 'Crónicos y encargos sincronizados', 'ok');

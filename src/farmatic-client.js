@@ -1342,14 +1342,22 @@ function getCategoriaLista() {
 // real. Devuelve el id de lista de CADA categoría (recién creada o ya existente antes),
 // para que tanto la siembra de favoritos reales (fase A) como la de "más vendido" (fase
 // B, al final del sync) puedan usarlas sin tener que volver a crear nada.
+// Los "return null" de aquí antes eran invisibles fuera de esta función — solo un
+// log.warn LOCAL del agente, nunca reportado al backend, así que un fallo aquí (tabla
+// inexistente, columna no reconocida, IdLista sin autonumérico) no dejaba ningún rastro
+// consultable desde el panel de admin (caso real: no se pudo confirmar si Jose-2 había
+// creado sus listas o no sin pedirle capturas de pantalla al cliente). Ahora se devuelve
+// el motivo explícito para que sembrarFavoritosReales() lo propague y sync.js lo reporte
+// con warn() — mismo mecanismo que ya usan los avisos de ventas (last_sync_warnings_detalle).
 async function asegurarListasCategoria() {
   const p = await getPool();
 
   const tblR = await p.request().query(`SELECT name FROM sys.tables WHERE name = 'ListaArticu'`)
     .catch(() => ({ recordset: [] }));
   if (!tblR.recordset.length) {
-    log.warn('Auto-creación de listas omitida: no existe la tabla ListaArticu');
-    return null;
+    const motivo = 'no existe la tabla ListaArticu';
+    log.warn('Auto-creación de listas omitida: ' + motivo);
+    return { omitida: true, motivo };
   }
   const colsR = await p.request().query(
     `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'ListaArticu'`
@@ -1360,18 +1368,21 @@ async function asegurarListasCategoria() {
     columnasReales: cols, descripcion: 'Columna de ListaArticu con el nombre/descripción visible de cada lista de artículos.',
   });
   if (!colNombre) {
-    log.warn('Auto-creación de listas omitida: ListaArticu no tiene columna Nombre/Descripcion reconocible');
-    return null;
+    const motivo = 'ListaArticu no tiene columna Nombre/Descripcion reconocible';
+    log.warn('Auto-creación de listas omitida: ' + motivo);
+    return { omitida: true, motivo };
   }
   const identityR = await p.request().query(
     `SELECT COLUMNPROPERTY(OBJECT_ID('ListaArticu'), 'IdLista', 'IsIdentity') AS es_identity`
   ).catch(() => ({ recordset: [] }));
   if (identityR.recordset[0]?.es_identity !== 1) {
-    log.warn('Auto-creación de listas omitida: ListaArticu.IdLista no es autonumérico, no se puede generar un id seguro');
-    return null;
+    const motivo = 'ListaArticu.IdLista no es autonumérico, no se puede generar un id seguro';
+    log.warn('Auto-creación de listas omitida: ' + motivo);
+    return { omitida: true, motivo };
   }
 
   const creadas = [];
+  const fallos = [];
   const faltantes = Object.keys(CATEGORIA_ENV).filter(cat => !process.env[CATEGORIA_ENV[cat]]);
   for (const categoria of faltantes) {
     try {
@@ -1385,6 +1396,7 @@ async function asegurarListasCategoria() {
       }
     } catch (err) {
       log.warn(`No se pudo crear la lista de ${categoria}:`, err.message);
+      fallos.push(`${categoria}: ${err.message}`);
     }
   }
 
@@ -1393,7 +1405,7 @@ async function asegurarListasCategoria() {
     const id = process.env[CATEGORIA_ENV[categoria]];
     if (id) listaIdPorCategoria.set(categoria, parseInt(id, 10));
   }
-  return { creadas, listaIdPorCategoria };
+  return { creadas, fallos, listaIdPorCategoria };
 }
 
 // Fase A — al PRINCIPIO del sync (antes de leer/subir ventas de este ciclo): asegura las
@@ -1402,14 +1414,16 @@ async function asegurarListasCategoria() {
 // aquí. Los grupos sin favorito real se dejan para la fase B, al final del sync.
 async function sembrarFavoritosReales(categoriasActuales, favoritosReales) {
   const aseguradas = await asegurarListasCategoria();
-  if (!aseguradas) return null;
-  const { creadas, listaIdPorCategoria } = aseguradas;
+  if (aseguradas.omitida) return aseguradas;
+  const { creadas, fallos, listaIdPorCategoria } = aseguradas;
   const p = await getPool();
 
   const favoritosPorCh = favoritosReales instanceof Map ? favoritosReales : new Map();
   const categoriaPorCh = new Map((categoriasActuales || []).map(r => [Number(r.ch), r.categoria]));
 
   let favoritosCreados = 0;
+  let favoritosSinLista = 0;
+  const fallosSiembra = [];
   for (const [ch, cn] of favoritosPorCh) {
     // Si el ch no tiene categoría calculada (grupo homogéneo oficial no reconocido por el
     // SaaS, o "ch" sintético de un favorito real sin CODConjunto — ver fetchFavoritosActuales)
@@ -1417,7 +1431,7 @@ async function sembrarFavoritosReales(categoriasActuales, favoritosReales) {
     // dispensar, así que se guarda en RESTO en vez de perderlo.
     const categoria = categoriaPorCh.get(ch) || 'RESTO';
     const listaId = listaIdPorCategoria.get(categoria);
-    if (!listaId) continue;
+    if (!listaId) { favoritosSinLista++; continue; }
     try {
       await p.request()
         .input('lista', sql.Int, listaId)
@@ -1429,11 +1443,16 @@ async function sembrarFavoritosReales(categoriasActuales, favoritosReales) {
       favoritosCreados++;
     } catch (err) {
       log.warn(`No se pudo sembrar favorito real de CH ${ch}:`, err.message);
+      fallosSiembra.push(`CH ${ch}: ${err.message}`);
     }
   }
   if (creadas.length) log.info(`✓ Listas de categoría creadas en Farmatic: ${creadas.length}`);
   if (favoritosCreados > 0) log.info(`✓ Favoritos reales sembrados: ${favoritosCreados}`);
-  return { creadas, favoritos_creados: favoritosCreados };
+  return {
+    creadas, fallos_creacion: fallos, favoritos_creados: favoritosCreados,
+    favoritos_totales: favoritosPorCh.size, favoritos_sin_lista: favoritosSinLista,
+    fallos_siembra: fallosSiembra,
+  };
 }
 
 // Fase B — al FINAL del sync (con las ventas de este ciclo ya subidas): para los grupos
