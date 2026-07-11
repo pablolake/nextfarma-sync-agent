@@ -200,6 +200,17 @@ async function reportarListasCreadas(payload) {
   }
 }
 
+// Traza en vivo del paso actual del sync (ver step() en sync.js) — deliberadamente
+// fire-and-forget: si esto falla (sin red, backend caído) nunca debe frenar ni cancelar
+// el sync en sí, solo perderse la visibilidad en el panel de admin de ese paso concreto.
+async function reportarPaso(key, label, status) {
+  try {
+    await request('/api/sync/paso', { method: 'POST', body: { key, label, status } });
+  } catch (err) {
+    log.warn('reportarPaso falló:', err.message);
+  }
+}
+
 // Mapeo de esquema Farmatic ya resuelto para este tenant (columnas/tablas reales por
 // entidad.atributo) — se carga una vez al arrancar cada sync y se usa como memoria: lo
 // ya resuelto no se vuelve a interpretar (ver resolverAtributoColumna en farmatic-client.js).
@@ -280,6 +291,7 @@ module.exports = {
   obtenerConfigSync,
   obtenerCategoriasActuales,
   reportarListasCreadas,
+  reportarPaso,
   reportarCategoriasSinResolver,
   sugerirListas,
   obtenerMapeoEsquema,

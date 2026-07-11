@@ -52,7 +52,13 @@ function calcularSCporLabMes(ventas, productos) {
 
 async function runSync(opts = {}) {
   const { onStep } = opts;
-  const step = (key, label, status) => onStep?.({ key, label, status });
+  // step() ya avisaba a la ventana local del asistente (onStep) — ahora también reporta al
+  // backend (fire-and-forget, ver reportarPaso en api-client.js) para que el panel de admin
+  // pueda mostrar en qué paso está un sync EN CURSO sin depender del log local del cliente.
+  const step = (key, label, status) => {
+    onStep?.({ key, label, status });
+    api.reportarPaso(key, label, status);
+  };
 
   const t0 = Date.now();
   log.info('═══════════════════════════════════════════');
