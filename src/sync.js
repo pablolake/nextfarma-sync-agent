@@ -78,6 +78,25 @@ async function runSync(opts = {}) {
     return { ...resultados, elapsed: '0s' };
   }
 
+  api.resetAbort();
+  const sendPing = async (status, elapsedS) => {
+    try {
+      await api.request('/api/sync/ping', {
+        method: 'POST',
+        body: {
+          status,
+          duration_s: Math.round(parseFloat(elapsedS)),
+          warnings:   resultados.warn.length,
+          errors:     resultados.error.length,
+          warnings_detalle: resultados.warn,
+          errors_detalle:   resultados.error,
+        },
+      });
+    } catch (e) {
+      log.warn('sync/ping omitido:', e.message);
+    }
+  };
+
   // ── PASO 1a: Comprobar conexión a Farmatic UNA sola vez ──────────────
   // Cada paso de abajo (ventas, catálogo, recepciones, favoritos, vendedores…) llama a
   // getPool() por su cuenta y solo atrapa el error para avisar y seguir con el siguiente
@@ -99,7 +118,9 @@ async function runSync(opts = {}) {
       diagnostico.sugerencias.forEach(s => err('  → ' + s));
     }
     step('db', 'Sin conexión con Farmatic — sync cancelado', 'error');
-    return { ...resultados, elapsed: ((Date.now() - t0) / 1000).toFixed(1) + 's' };
+    const elapsedDb = ((Date.now() - t0) / 1000).toFixed(1);
+    await sendPing('error', elapsedDb);
+    return { ...resultados, elapsed: elapsedDb + 's' };
   }
 
   // Carga el mapeo de columnas/tablas ya resuelto para este tenant (ver
@@ -169,23 +190,6 @@ async function runSync(opts = {}) {
   } catch (e) {
     log.warn('Barrido de esquema omitido:', e.message);
   }
-
-  api.resetAbort();
-  const sendPing = async (status, elapsedS) => {
-    try {
-      await api.request('/api/sync/ping', {
-        method: 'POST',
-        body: {
-          status,
-          duration_s: Math.round(parseFloat(elapsedS)),
-          warnings:   resultados.warn.length,
-          errors:     resultados.error.length,
-        },
-      });
-    } catch (e) {
-      log.warn('sync/ping omitido:', e.message);
-    }
-  };
 
   const anioActual   = new Date().getFullYear();
   const anioAnterior = anioActual - 1;
@@ -382,8 +386,12 @@ async function runSync(opts = {}) {
     log.warn('Favoritos omitidos:', e.message);
   }
 
+  // Declarado aquí (no dentro del try de abajo) para poder reutilizarlo más tarde en la
+  // auto-creación de listas — sembrar con el favorito real ya leído, sin repetir la
+  // búsqueda (potencialmente cara, por tandas con IA) una segunda vez en el mismo ciclo.
+  let favActuales = new Map();
   try {
-    const favActuales = await farmatic.fetchFavoritosActuales();
+    favActuales = await farmatic.fetchFavoritosActuales();
     if (favActuales.size > 0) {
       const cambios = [];
       for (const [ch, cn] of favActuales) cambios.push({ ch, cn_favorito: cn });
@@ -530,29 +538,29 @@ async function runSync(opts = {}) {
     log.warn('Alta de empleados nuevos omitida:', e.message);
   }
 
-  // Auto-creación de listas de categoría cuando esta instalación no usa Listas de
-  // Farmatic para favoritos. Doble candado, por defecto todo apagado: solo corre si el
-  // tenant tiene farmatic_write_enabled Y farmatic_autocrear_listas activos en Railway
-  // (ver [[project_sync_electron]] — jose no la necesita y se queda desactivada como
-  // el resto hasta que se active a mano en algún tenant piloto), y solo si de verdad no
-  // hay ninguna lista real en Farmatic (si hubiera alguna sin mapear, no se toca nada).
+  // Auto-creación de listas de categoría con nuestro formato. Doble candado, por defecto
+  // todo apagado: solo corre si el tenant tiene farmatic_write_enabled Y
+  // farmatic_autocrear_listas activos en Railway (ver [[project_sync_electron]] — jose no
+  // la necesita y se queda desactivada como el resto hasta que se active a mano en algún
+  // tenant piloto). YA NO exige que Farmatic tenga cero listas — el titular puede tener
+  // otras listas propias (p.ej. una única "Favoritos") y aun así queremos que las 7
+  // categorías de NextFarma existan siempre en su Farmatic; el favorito real ya detectado
+  // (favActuales, de esa lista existente si la hay) se usa como semilla con prioridad
+  // sobre el "más vendido", y la categoría es siempre la que calcula el propio SaaS.
   try {
     if (!farmatic.getCategoriaLista()) {
       const cfgTenant = await api.obtenerConfigSync();
       if (cfgTenant.farmatic_write_enabled && cfgTenant.farmatic_autocrear_listas) {
-        const listasExistentes = await farmatic.fetchListasWizard();
-        if (!listasExistentes || listasExistentes.length === 0) {
-          const categorias = await api.obtenerCategoriasActuales();
-          const resultado = await farmatic.crearListasCategoriaYFavoritosIniciales(categorias);
-          if (resultado?.creadas?.length) {
-            listasCreadas = Object.fromEntries(resultado.creadas.map(c => [c.categoria, c.lista_id]));
-            // El backend espera { listas, favoritos_creados } — crearListasCategoriaYFavoritosIniciales()
-            // devuelve { creadas, favoritos_creados }. Antes se mandaba el objeto tal cual y el
-            // backend siempre respondía 400 "listas[] requerido": la alerta al titular nunca se
-            // llegó a crear. Detectado en la primera prueba real de este flujo contra Docker.
-            await api.reportarListasCreadas({ listas: resultado.creadas, favoritos_creados: resultado.favoritos_creados });
-            log.info(`✓ Listas de favoritos creadas en Farmatic: ${resultado.creadas.length}`);
-          }
+        const categorias = await api.obtenerCategoriasActuales();
+        const resultado = await farmatic.crearListasCategoriaYFavoritosIniciales(categorias, favActuales);
+        if (resultado?.creadas?.length) {
+          listasCreadas = Object.fromEntries(resultado.creadas.map(c => [c.categoria, c.lista_id]));
+          // El backend espera { listas, favoritos_creados } — crearListasCategoriaYFavoritosIniciales()
+          // devuelve { creadas, favoritos_creados }. Antes se mandaba el objeto tal cual y el
+          // backend siempre respondía 400 "listas[] requerido": la alerta al titular nunca se
+          // llegó a crear. Detectado en la primera prueba real de este flujo contra Docker.
+          await api.reportarListasCreadas({ listas: resultado.creadas, favoritos_creados: resultado.favoritos_creados });
+          log.info(`✓ Listas de favoritos creadas en Farmatic: ${resultado.creadas.length}`);
         }
       }
     }

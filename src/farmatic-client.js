@@ -969,25 +969,61 @@ async function resolverListaFavoritosUnica() {
   const mapeadas = new Set(Object.keys(getListaCategoria() || {}).map(Number));
   const candidatas = listas.filter(l => !mapeadas.has(l.id) && l.n_items > 0);
   if (!candidatas.length) return null;
+
+  // Si ya se resolvió en un sync anterior y esa lista sigue existiendo, se usa tal cual sin
+  // llamar a la IA — el caché normal de resolverAtributo es por tanda (ver bucle de abajo),
+  // no global, así que sin este atajo cada sync repetiría toda la búsqueda por tandas aunque
+  // ya se supiera la respuesta.
+  const todasOpciones = new Set(candidatas.map(l => `${l.id} - ${l.nombre}`));
+  const guardado = mapeoEsquemaActual?.LISTA_ARTICU?.lista_favoritos_unica;
+  if (guardado && todasOpciones.has(guardado)) {
+    const idGuardado = parseInt(guardado.split(' - ')[0], 10);
+    if (Number.isFinite(idGuardado)) return idGuardado;
+  }
+
   const conAlarma = await Promise.all(
     candidatas.map(async l => ({ ...l, grupos_con_mas_de_1_cn: await gruposConMasDeUnCn(p, l.id) }))
   );
-  const opciones = new Set(conAlarma.map(l => `${l.id} - ${l.nombre}`));
-  const heuristicos = conAlarma
-    .filter(l => /favorit|preferen|recomend/i.test(l.nombre) && l.grupos_con_mas_de_1_cn === 0)
-    .map(l => `${l.id} - ${l.nombre}`);
-  const elegido = await resolverAtributoTabla({
-    entidad: 'LISTA_ARTICU', atributo: 'lista_favoritos_unica',
-    candidatos: heuristicos, tablasReales: opciones,
-    descripcion: `${CONTEXTO_FAVORITOS_IA} Esta farmacia no tiene configuradas las 7 listas de ` +
-      'categoría de favoritos. De estas listas reales de Farmatic sin mapear a ninguna categoría, ' +
-      '¿cuál es la más probable candidata a ser "la lista de favoritos" de la farmacia? Formato ' +
-      '"id - nombre — nº de artículos, grupos con >1 CN [alarma]": ' +
-      conAlarma.map(l => `${l.id} - ${l.nombre} — ${l.n_items} artículos, ${l.grupos_con_mas_de_1_cn} grupos con >1 CN`).join('; '),
-  })
-  if (!elegido) return null
-  const id = parseInt(elegido.split(' - ')[0], 10)
-  return Number.isFinite(id) ? id : null
+
+  // Farmacias con muchas listas (cientos, algunas con miles de artículos — caso real: 333
+  // listas en una farmacia) mandaban TODAS como candidatas a la IA en un único prompt enorme
+  // — lento y con más probabilidad de fallar. Una lista real de favoritos tiene, por
+  // construcción, un favorito por grupo homogéneo — pocos o ningún grupo con más de un CN
+  // dentro, a diferencia de catálogos/almacenes/listas de proveedor que mezclan muchos CN
+  // por grupo. Se ordena por esa proporción y se manda a la IA en tandas pequeñas,
+  // probando primero las más plausibles y parando en cuanto una tanda resuelve — así no
+  // hace falta acertar el recorte a la primera, solo tener buen orden de búsqueda. Tope de
+  // tandas para acotar el coste en el caso extremo de cientos de listas igual de "limpias".
+  const TAM_TANDA = 20;
+  const MAX_TANDAS = 10;
+  const ranking = [...conAlarma].sort((a, b) =>
+    (a.grupos_con_mas_de_1_cn / a.n_items) - (b.grupos_con_mas_de_1_cn / b.n_items) ||
+    a.grupos_con_mas_de_1_cn - b.grupos_con_mas_de_1_cn
+  );
+  for (let i = 0; i < ranking.length && i / TAM_TANDA < MAX_TANDAS; i += TAM_TANDA) {
+    const tanda = ranking.slice(i, i + TAM_TANDA);
+    const heuristicos = tanda
+      .filter(l => /favorit|preferen|recomend/i.test(l.nombre) && l.grupos_con_mas_de_1_cn === 0)
+      .map(l => `${l.id} - ${l.nombre}`);
+    const opciones = new Set(tanda.map(l => `${l.id} - ${l.nombre}`));
+    const numTanda = Math.floor(i / TAM_TANDA) + 1;
+    const elegido = await resolverAtributoTabla({
+      entidad: 'LISTA_ARTICU', atributo: 'lista_favoritos_unica',
+      candidatos: heuristicos, tablasReales: opciones,
+      descripcion: `${CONTEXTO_FAVORITOS_IA} Esta farmacia no tiene configuradas las 7 listas de ` +
+        'categoría de favoritos. De estas listas reales de Farmatic sin mapear a ninguna categoría ' +
+        `(tanda ${numTanda}, ${tanda.length} de ${ranking.length} candidatas totales, ordenadas de más ` +
+        'a menos plausible), ¿cuál es la más probable candidata a ser "la lista de favoritos" de la ' +
+        'farmacia? Si ninguna de esta tanda encaja razonablemente, devuelve un array vacío — se seguirá ' +
+        'buscando en el resto. Formato "id - nombre — nº de artículos, grupos con >1 CN [alarma]": ' +
+        tanda.map(l => `${l.id} - ${l.nombre} — ${l.n_items} artículos, ${l.grupos_con_mas_de_1_cn} grupos con >1 CN`).join('; '),
+    });
+    if (elegido) {
+      const id = parseInt(elegido.split(' - ')[0], 10);
+      if (Number.isFinite(id)) return id;
+    }
+  }
+  return null;
 }
 
 // Último recurso cuando ni las 7 categorías ni una lista dentro de ListaArticu resuelven el
@@ -1276,7 +1312,7 @@ function getCategoriaLista() {
 // que ya tenga env var configurada. Cualquier duda sobre el esquema real (tabla, columna
 // de nombre, autonumérico) aborta sin escribir nada — mejor no crear nada que crear algo
 // mal en una base de datos de producción real.
-async function crearListasCategoriaYFavoritosIniciales(categoriasActuales) {
+async function crearListasCategoriaYFavoritosIniciales(categoriasActuales, favoritosReales) {
   const p = await getPool();
 
   const tblR = await p.request().query(`SELECT name FROM sys.tables WHERE name = 'ListaArticu'`)
@@ -1357,8 +1393,17 @@ async function crearListasCategoriaYFavoritosIniciales(categoriasActuales) {
   const categoriaPorCh    = new Map((categoriasActuales || []).map(r => [Number(r.ch), r.categoria]));
   const listaIdPorCategoria = new Map(creadas.map(c => [c.categoria, c.lista_id]));
 
+  // El favorito real de esta farmacia (ya detectado en fetchFavoritosActuales — su propia
+  // lista existente, si la tiene) manda siempre sobre el "más vendido": es su elección de
+  // verdad, no una suposición nuestra. El más vendido solo rellena los GH de los que no
+  // tenemos ningún favorito real conocido.
+  const favoritosPorCh = favoritosReales instanceof Map ? favoritosReales : new Map();
+  const chsAConsiderar = new Set([...topPorCh.keys(), ...favoritosPorCh.keys()]);
+
   let favoritosCreados = 0;
-  for (const [ch, cn] of topPorCh) {
+  for (const ch of chsAConsiderar) {
+    const cn = favoritosPorCh.get(ch) ?? topPorCh.get(ch);
+    if (!cn) continue;
     const listaId = listaIdPorCategoria.get(categoriaPorCh.get(ch));
     if (!listaId) continue;
     try {
