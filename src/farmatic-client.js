@@ -857,6 +857,16 @@ const CATEGORIA_ENV = {
   CONSOLIDADO:        'LIST_CONSOLIDADO',
 };
 
+// Mismo patrón que CATEGORIA_ENV pero para el color de margen del favorito (verde/amarillo/
+// gris, ver asignarColoresPorMU en nextfarma-api) — clasificación independiente de la
+// categoría de rotación: un mismo CN favorito puede estar a la vez en su lista de categoría
+// (p.ej. MAX_ROTACION_A) y en su lista de color (p.ej. VERDE).
+const COLOR_ENV = {
+  verde:    'LIST_COLOR_VERDE',
+  amarillo: 'LIST_COLOR_AMARILLO',
+  gris:     'LIST_COLOR_GRIS',
+};
+
 // Categorías que ni la config guardada ni la detección por nombre han resuelto todavía
 // (sin env var puesta). Se usa para avisar al titular en el SaaS de que puede terminar
 // de configurar el wizard — nunca para escribir ni para bloquear el sync.
@@ -1349,7 +1359,12 @@ function getCategoriaLista() {
 // creado sus listas o no sin pedirle capturas de pantalla al cliente). Ahora se devuelve
 // el motivo explícito para que sembrarFavoritosReales() lo propague y sync.js lo reporte
 // con warn() — mismo mecanismo que ya usan los avisos de ventas (last_sync_warnings_detalle).
-async function asegurarListasCategoria() {
+// Genérico: crea (si faltan) las listas de un "esquema" bucket→env var — usado tanto para
+// las 7 de categoría (CATEGORIA_ENV) como para las 3 de color de margen (COLOR_ENV). Mismo
+// nombre "NextFarma - {BUCKET}" en ambos casos, así que reutilizar esto en vez de duplicar
+// la función evita que un fix (p.ej. las columnas extra de ListaArticu) se aplique a una y
+// se olvide en la otra.
+async function asegurarListas(envMap) {
   const p = await getPool();
 
   const tblR = await p.request().query(`SELECT name FROM sys.tables WHERE name = 'ListaArticu'`)
@@ -1393,54 +1408,61 @@ async function asegurarListasCategoria() {
 
   const creadas = [];
   const fallos = [];
-  const faltantes = Object.keys(CATEGORIA_ENV).filter(cat => !process.env[CATEGORIA_ENV[cat]]);
-  for (const categoria of faltantes) {
+  const faltantes = Object.keys(envMap).filter(bucket => !process.env[envMap[bucket]]);
+  for (const bucket of faltantes) {
     try {
       const r = await p.request()
-        .input('nombre', sql.VarChar, `NextFarma - ${categoria}`)
+        .input('nombre', sql.VarChar, `NextFarma - ${bucket}`)
         .query(`INSERT INTO ListaArticu (${columnasInsert}) OUTPUT INSERTED.IdLista AS id VALUES (${valoresInsert})`);
       const nuevoId = r.recordset[0]?.id;
       if (nuevoId) {
-        creadas.push({ categoria, lista_id: nuevoId });
-        process.env[CATEGORIA_ENV[categoria]] = String(nuevoId);
+        creadas.push({ categoria: bucket, lista_id: nuevoId });
+        process.env[envMap[bucket]] = String(nuevoId);
       }
     } catch (err) {
-      log.warn(`No se pudo crear la lista de ${categoria}:`, err.message);
-      fallos.push(`${categoria}: ${err.message}`);
+      log.warn(`No se pudo crear la lista de ${bucket}:`, err.message);
+      fallos.push(`${bucket}: ${err.message}`);
     }
   }
 
-  const listaIdPorCategoria = new Map();
-  for (const categoria of Object.keys(CATEGORIA_ENV)) {
-    const id = process.env[CATEGORIA_ENV[categoria]];
-    if (id) listaIdPorCategoria.set(categoria, parseInt(id, 10));
+  const listaIdPorBucket = new Map();
+  for (const bucket of Object.keys(envMap)) {
+    const id = process.env[envMap[bucket]];
+    if (id) listaIdPorBucket.set(bucket, parseInt(id, 10));
   }
-  return { creadas, fallos, listaIdPorCategoria };
+  return { creadas, fallos, listaIdPorBucket };
 }
+const asegurarListasCategoria = () => asegurarListas(CATEGORIA_ENV);
+const asegurarListasColor     = () => asegurarListas(COLOR_ENV);
 
 // Fase A — al PRINCIPIO del sync (antes de leer/subir ventas de este ciclo): asegura las
 // listas y siembra cada una SOLO con el favorito REAL ya detectado (favoritosReales, de
 // fetchFavoritosActuales) — es la elección de verdad del titular, nunca "más vendido"
 // aquí. Los grupos sin favorito real se dejan para la fase B, al final del sync.
-async function sembrarFavoritosReales(categoriasActuales, favoritosReales) {
-  const aseguradas = await asegurarListasCategoria();
+// Genérico: crea (si faltan) las listas de `asegurarFn` y siembra cada una SOLO con el
+// favorito REAL ya detectado — nunca "más vendido" aquí (eso es fase B, y solo aplica a
+// categoría, ver completarFavoritosConMasVendido). `bucketPorCh` es el bucket calculado por
+// el SaaS para cada ch (categoría o color); `bucketFallback` es donde cae un favorito real
+// cuyo ch no tiene bucket calculable (ver comentario de más abajo) — 'RESTO' para categoría,
+// 'gris' para color.
+async function sembrarFavoritosEnListas(asegurarFn, bucketPorChMap, favoritosReales, bucketFallback, etiqueta) {
+  const aseguradas = await asegurarFn();
   if (aseguradas.omitida) return aseguradas;
-  const { creadas, fallos, listaIdPorCategoria } = aseguradas;
+  const { creadas, fallos, listaIdPorBucket } = aseguradas;
   const p = await getPool();
 
   const favoritosPorCh = favoritosReales instanceof Map ? favoritosReales : new Map();
-  const categoriaPorCh = new Map((categoriasActuales || []).map(r => [Number(r.ch), r.categoria]));
 
   let favoritosCreados = 0;
   let favoritosSinLista = 0;
   const fallosSiembra = [];
   for (const [ch, cn] of favoritosPorCh) {
-    // Si el ch no tiene categoría calculada (grupo homogéneo oficial no reconocido por el
-    // SaaS, o "ch" sintético de un favorito real sin CODConjunto — ver fetchFavoritosActuales)
-    // no se descarta el favorito: Farmatic ya lo reconoce con su propia agrupación interna al
-    // dispensar, así que se guarda en RESTO en vez de perderlo.
-    const categoria = categoriaPorCh.get(ch) || 'RESTO';
-    const listaId = listaIdPorCategoria.get(categoria);
+    // Si el ch no tiene bucket calculado (grupo homogéneo oficial no reconocido por el SaaS,
+    // o "ch" sintético de un favorito real sin CODConjunto — ver fetchFavoritosActuales) no
+    // se descarta el favorito: Farmatic ya lo reconoce con su propia agrupación interna al
+    // dispensar, así que cae al bucket por defecto en vez de perderse.
+    const bucket = bucketPorChMap.get(ch) || bucketFallback;
+    const listaId = listaIdPorBucket.get(bucket);
     if (!listaId) { favoritosSinLista++; continue; }
     try {
       await p.request()
@@ -1452,17 +1474,25 @@ async function sembrarFavoritosReales(categoriasActuales, favoritosReales) {
         `);
       favoritosCreados++;
     } catch (err) {
-      log.warn(`No se pudo sembrar favorito real de CH ${ch}:`, err.message);
+      log.warn(`No se pudo sembrar favorito real de CH ${ch} (${etiqueta}):`, err.message);
       fallosSiembra.push(`CH ${ch}: ${err.message}`);
     }
   }
-  if (creadas.length) log.info(`✓ Listas de categoría creadas en Farmatic: ${creadas.length}`);
-  if (favoritosCreados > 0) log.info(`✓ Favoritos reales sembrados: ${favoritosCreados}`);
+  if (creadas.length) log.info(`✓ Listas de ${etiqueta} creadas en Farmatic: ${creadas.length}`);
+  if (favoritosCreados > 0) log.info(`✓ Favoritos reales sembrados (${etiqueta}): ${favoritosCreados}`);
   return {
     creadas, fallos_creacion: fallos, favoritos_creados: favoritosCreados,
     favoritos_totales: favoritosPorCh.size, favoritos_sin_lista: favoritosSinLista,
     fallos_siembra: fallosSiembra,
   };
+}
+function sembrarFavoritosReales(categoriasActuales, favoritosReales) {
+  const categoriaPorCh = new Map((categoriasActuales || []).map(r => [Number(r.ch), r.categoria]));
+  return sembrarFavoritosEnListas(asegurarListasCategoria, categoriaPorCh, favoritosReales, 'RESTO', 'categoría');
+}
+function sembrarFavoritosColor(coloresActuales, favoritosReales) {
+  const colorPorCh = new Map((coloresActuales || []).map(r => [Number(r.ch), r.color]));
+  return sembrarFavoritosEnListas(asegurarListasColor, colorPorCh, favoritosReales, 'gris', 'color');
 }
 
 // Fase B — al FINAL del sync (con las ventas de este ciclo ya subidas): para los grupos
@@ -1940,6 +1970,7 @@ module.exports = {
   resolverAtributoColumna,
   resolverAtributoTabla,
   sembrarFavoritosReales,
+  sembrarFavoritosColor,
   completarFavoritosConMasVendido,
   discoverSchema,
   discoverDataQuality,

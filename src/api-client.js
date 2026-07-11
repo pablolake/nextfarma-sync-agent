@@ -191,6 +191,16 @@ async function obtenerCategoriasActuales() {
   }
 }
 
+async function obtenerColoresActuales() {
+  try {
+    const r = await request('/api/sync/colores-actuales');
+    return r.colores || [];
+  } catch (err) {
+    log.warn('obtenerColoresActuales falló:', err.message);
+    return [];
+  }
+}
+
 async function reportarListasCreadas(payload) {
   try {
     return await request('/api/sync/listas-creadas', { method: 'POST', body: payload });
@@ -290,6 +300,7 @@ module.exports = {
   enviarSchemaInfo,
   obtenerConfigSync,
   obtenerCategoriasActuales,
+  obtenerColoresActuales,
   reportarListasCreadas,
   reportarPaso,
   reportarCategoriasSinResolver,

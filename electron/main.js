@@ -56,6 +56,9 @@ function applyConfig(cfg) {
   if (w.listResto)                   process.env.LIST_RESTO             = String(w.listResto);
   if (w.listParados)                 process.env.LIST_PARADOS           = String(w.listParados);
   if (w.listConsolidado)             process.env.LIST_CONSOLIDADO       = String(w.listConsolidado);
+  if (w.listColorVerde)              process.env.LIST_COLOR_VERDE       = String(w.listColorVerde);
+  if (w.listColorAmarillo)           process.env.LIST_COLOR_AMARILLO    = String(w.listColorAmarillo);
+  if (w.listColorGris)               process.env.LIST_COLOR_GRIS        = String(w.listColorGris);
   if (w.listNegra)                   process.env.LIST_NEGRA             = String(w.listNegra);
   if (w.scUmbral)                    process.env.SC_UMBRAL              = String(w.scUmbral);
   if (w.opcRGPD)                     process.env.RGPD_OPCION            = String(w.opcRGPD);
@@ -81,19 +84,30 @@ async function runSyncOnce() {
     lastSyncResults = await runSync({
       onStep: (stepData) => send('sync-step', stepData),
     });
-    // Si este ciclo creó listas de categoría en Farmatic (ver sync.js), se persisten en la
-    // config local para que getCategoriaLista() las reconozca desde ya, sin reiniciar la app.
-    if (lastSyncResults?.listasCreadas && Object.keys(lastSyncResults.listasCreadas).length) {
+    // Si este ciclo creó listas de categoría y/o de color en Farmatic (ver sync.js), se
+    // persisten en la config local para que getCategoriaLista()/getListaCategoria() las
+    // reconozcan desde ya, sin reiniciar la app — y para que un reinicio no las vuelva a
+    // crear duplicadas (el id solo vive en process.env mientras el proceso sigue vivo).
+    if (
+      (lastSyncResults?.listasCreadas && Object.keys(lastSyncResults.listasCreadas).length) ||
+      (lastSyncResults?.listasColorCreadas && Object.keys(lastSyncResults.listasColorCreadas).length)
+    ) {
       const CATEGORIA_A_CAMPO = {
         INCENTIVADOS_STAR: 'listIncentivadosStar', INCENTIVADOS: 'listIncentivados',
         MAX_ROTACION_A:    'listMaxRotA',           MAX_ROTACION_B: 'listMaxRotB',
         RESTO:             'listResto',             PARADOS:        'listParados',
         CONSOLIDADO:       'listConsolidado',
       };
+      const COLOR_A_CAMPO = {
+        verde: 'listColorVerde', amarillo: 'listColorAmarillo', gris: 'listColorGris',
+      };
       const cfg = store.get('config', {});
       cfg.wizard = cfg.wizard || {};
-      for (const [categoria, id] of Object.entries(lastSyncResults.listasCreadas)) {
+      for (const [categoria, id] of Object.entries(lastSyncResults.listasCreadas || {})) {
         if (CATEGORIA_A_CAMPO[categoria]) cfg.wizard[CATEGORIA_A_CAMPO[categoria]] = id;
+      }
+      for (const [color, id] of Object.entries(lastSyncResults.listasColorCreadas || {})) {
+        if (COLOR_A_CAMPO[color]) cfg.wizard[COLOR_A_CAMPO[color]] = id;
       }
       store.set('config', cfg);
       applyConfig(cfg);

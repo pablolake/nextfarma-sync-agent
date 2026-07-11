@@ -67,6 +67,7 @@ async function runSync(opts = {}) {
   // Track partial results to inform the user at the end
   const resultados = { ok: [], warn: [], error: [] };
   let listasCreadas = null; // {categoria: nuevoId} si se crearon listas de categoría este ciclo
+  let listasColorCreadas = null; // {verde|amarillo|gris: nuevoId} si se crearon listas de color este ciclo
   const ok   = (msg) => { resultados.ok.push(msg);    log.info('✓ ' + msg); };
   const warn = (msg) => { resultados.warn.push(msg);  log.warn('⚠ ' + msg); };
   const err  = (msg) => { resultados.error.push(msg); log.error('✗ ' + msg); };
@@ -255,6 +256,41 @@ async function runSync(opts = {}) {
     }
   } catch (e) {
     warn('Auto-creación de listas (fase A) omitida: ' + e.message);
+  }
+
+  // Listas de color de margen (VERDE/AMARILLO/GRIS, ver asignarColoresPorMU en
+  // nextfarma-api) — mismo patrón que las de categoría, solo favoritos reales (no hay
+  // "más vendido" para el color: es una propiedad del favorito ya elegido, no una
+  // alternativa a rankear), mismo doble candado de escritura.
+  try {
+    const cfgTenant = await api.obtenerConfigSync();
+    if (cfgTenant.farmatic_write_enabled && cfgTenant.farmatic_autocrear_listas) {
+      const colores = await api.obtenerColoresActuales();
+      const resultadoColor = await farmatic.sembrarFavoritosColor(colores, favActuales);
+      if (resultadoColor?.omitida) {
+        warn('Auto-creación de listas de color omitida: ' + resultadoColor.motivo);
+      } else {
+        if (resultadoColor.creadas.length) {
+          listasColorCreadas = Object.fromEntries(resultadoColor.creadas.map(c => [c.categoria, c.lista_id]));
+          await api.reportarListasCreadas({ listas: resultadoColor.creadas, favoritos_creados: resultadoColor.favoritos_creados });
+          ok(`Listas de color creadas en Farmatic: ${resultadoColor.creadas.length}`);
+          await farmatic.fetchListasWizard()
+            .then(listasActualizadas => api.enviarSchemaInfo({ listas: listasActualizadas }))
+            .catch(e => warn('No se pudo actualizar la estructura tras crear listas de color: ' + e.message));
+        }
+        if (resultadoColor.fallos_creacion?.length) {
+          warn(`No se pudieron crear ${resultadoColor.fallos_creacion.length} listas de color: ${resultadoColor.fallos_creacion.join('; ')}`);
+        }
+        if (resultadoColor.favoritos_creados > 0) {
+          ok(`Favoritos reales sembrados por color en Farmatic: ${resultadoColor.favoritos_creados} de ${resultadoColor.favoritos_totales}`);
+        }
+        if (resultadoColor.fallos_siembra?.length) {
+          warn(`Fallos al sembrar ${resultadoColor.fallos_siembra.length} favoritos por color: ${resultadoColor.fallos_siembra.slice(0, 5).join('; ')}${resultadoColor.fallos_siembra.length > 5 ? '…' : ''}`);
+        }
+      }
+    }
+  } catch (e) {
+    warn('Auto-creación de listas de color omitida: ' + e.message);
   }
 
   const anioActual   = new Date().getFullYear();
@@ -625,7 +661,7 @@ async function runSync(opts = {}) {
 
   await sendPing(resultados.error.length > 0 ? 'error' : resultados.warn.length > 0 ? 'warn' : 'ok', elapsed)
 
-  return { ...resultados, elapsed, listasCreadas };
+  return { ...resultados, elapsed, listasCreadas, listasColorCreadas };
 }
 
 async function syncEncargos() {
