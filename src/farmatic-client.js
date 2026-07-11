@@ -974,7 +974,15 @@ async function resolverListaFavoritosUnica() {
   // contenido es, casi con toda seguridad, la que buscamos — se usa directamente, sin
   // gastar una llamada a la IA (ni las tandas de abajo) para algo tan obvio.
   const exacta = candidatas.find(l => /^favoritos?$/i.test(String(l.nombre || '').trim()));
-  if (exacta) return exacta.id;
+  if (exacta) {
+    // Se persiste igual que un acierto por heurística (aunque no se haya llamado a la
+    // IA) — si no, este atajo es invisible en el panel admin, indistinguible de "no
+    // detectado todavía".
+    require('./api-client').reportarMapeoResuelto(
+      'LISTA_ARTICU', 'lista_favoritos_unica', `${exacta.id} - ${exacta.nombre}`, 'alta'
+    ).catch(() => {});
+    return exacta.id;
+  }
 
   // Si ya se resolvió en un sync anterior y esa lista sigue existiendo, se usa tal cual sin
   // llamar a la IA — el caché normal de resolverAtributo es por tanda (ver bucle de abajo),
