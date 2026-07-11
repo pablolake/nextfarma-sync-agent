@@ -157,20 +157,13 @@ async function runSync(opts = {}) {
       log.warn('fetchListasWizard (diagnóstico) omitido:', e.message);
       return null;
     });
-    // Autodetección por nombre: si esta instalación ya usa nombres reconocibles (caso real:
-    // farmacia jose — "INCENTIVADOS", "PARADOS", "MAX ROTACION A/B"...), se rellenan las env
-    // vars de categoría que falten SIN pisar lo que ya esté configurado a mano en el
-    // asistente. Solo afecta a la LECTURA de favoritos (getListaCategoria) — la escritura
-    // sigue detrás del candado de farmatic_write_enabled en Railway, así que esto nunca
-    // activa una escritura nueva por sí solo.
-    if (listasFarmatic && listasFarmatic.length) {
-      const detectadas = farmatic.detectarListasPorNombre(listasFarmatic);
-      const nuevas = Object.entries(detectadas).filter(([envKey]) => !process.env[envKey]);
-      if (nuevas.length) {
-        for (const [envKey, id] of nuevas) process.env[envKey] = String(id);
-        log.info(`✓ Listas detectadas por nombre: ${nuevas.map(([k, id]) => `${k}=${id}`).join(', ')}`);
-      }
-    }
+    // Autodetección por nombre de las 7 categorías DESACTIVADA (decisión del titular,
+    // 2026-07-11) — un patrón demasiado laxo confundió "PRODUCTOS ESTRELLA" con la
+    // categoría STAR en una farmacia real, bloqueando en silencio la búsqueda de la
+    // lista de favoritos. Ya no vale la pena el riesgo de falso positivo: ahora solo se
+    // busca la lista única de favoritos (resolverListaFavoritosUnica) y las categorías
+    // las calcula siempre el propio SaaS — nunca se intenta adivinar una clasificación
+    // propia de la farmacia por nombre de lista.
     // Si la farmacia ya tiene ALGUNAS categorías resueltas (config manual o detección)
     // pero no todas, probablemente le interesa terminar de configurarlas — se avisa en
     // el SaaS (una vez, no en cada sync) para que abra el asistente. CONSOLIDADO es

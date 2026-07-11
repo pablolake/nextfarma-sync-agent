@@ -970,6 +970,12 @@ async function resolverListaFavoritosUnica() {
   const candidatas = listas.filter(l => !mapeadas.has(l.id) && l.n_items > 0);
   if (!candidatas.length) return null;
 
+  // Atajo determinista: una lista literalmente llamada "Favoritos" (o muy parecido) con
+  // contenido es, casi con toda seguridad, la que buscamos — se usa directamente, sin
+  // gastar una llamada a la IA (ni las tandas de abajo) para algo tan obvio.
+  const exacta = candidatas.find(l => /^favoritos?$/i.test(String(l.nombre || '').trim()));
+  if (exacta) return exacta.id;
+
   // Si ya se resolvió en un sync anterior y esa lista sigue existiendo, se usa tal cual sin
   // llamar a la IA — el caché normal de resolverAtributo es por tanda (ver bucle de abajo),
   // no global, así que sin este atajo cada sync repetiría toda la búsqueda por tandas aunque
