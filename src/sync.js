@@ -90,6 +90,7 @@ async function runSync(opts = {}) {
           errors:     resultados.error.length,
           warnings_detalle: resultados.warn,
           errors_detalle:   resultados.error,
+          agent_version: require('../package.json').version,
         },
       });
     } catch (e) {
