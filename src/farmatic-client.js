@@ -1381,6 +1381,16 @@ async function asegurarListasCategoria() {
     return { omitida: true, motivo };
   }
 
+  // ListaArticu suele tener más columnas que Nombre/Descripcion (caso real visto en Jose-2:
+  // Fecha, NumElem, Tipo, EnviarGrupo) — el barrido de esquema no captura si son NOT NULL sin
+  // default, así que en vez de asumir que están todas permitidas a NULL, se rellenan con un
+  // valor seguro cuando existen. Evita que el INSERT falle en silencio en instalaciones reales
+  // solo porque tienen más columnas que la tabla mínima usada al probar esto contra Docker.
+  const EXTRAS_SEGUROS = { Fecha: 'GETDATE()', NumElem: '0', Tipo: '0', EnviarGrupo: '0' };
+  const extrasPresentes = Object.keys(EXTRAS_SEGUROS).filter(c => cols.has(c));
+  const columnasInsert  = [colNombre, ...extrasPresentes].join(', ');
+  const valoresInsert   = ['@nombre', ...extrasPresentes.map(c => EXTRAS_SEGUROS[c])].join(', ');
+
   const creadas = [];
   const fallos = [];
   const faltantes = Object.keys(CATEGORIA_ENV).filter(cat => !process.env[CATEGORIA_ENV[cat]]);
@@ -1388,7 +1398,7 @@ async function asegurarListasCategoria() {
     try {
       const r = await p.request()
         .input('nombre', sql.VarChar, `NextFarma - ${categoria}`)
-        .query(`INSERT INTO ListaArticu (${colNombre}) OUTPUT INSERTED.IdLista AS id VALUES (@nombre)`);
+        .query(`INSERT INTO ListaArticu (${columnasInsert}) OUTPUT INSERTED.IdLista AS id VALUES (${valoresInsert})`);
       const nuevoId = r.recordset[0]?.id;
       if (nuevoId) {
         creadas.push({ categoria, lista_id: nuevoId });

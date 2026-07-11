@@ -223,6 +223,13 @@ async function runSync(opts = {}) {
           // titular nunca se llegó a crear. Detectado en la primera prueba real contra Docker.
           await api.reportarListasCreadas({ listas: resultado.creadas, favoritos_creados: resultado.favoritos_creados });
           ok(`Listas de favoritos creadas en Farmatic: ${resultado.creadas.length}`);
+          // El barrido de esquema (PASO 1b, más arriba) ya mandó `listas` ANTES de que estas
+          // se crearan — sin este reenvío, el panel de admin no las vería hasta el siguiente
+          // ciclo completo. Se manda solo `listas` (el backend lo conserva con COALESCE, sin
+          // tocar tablas/calidad/rgpd de este mismo ciclo — ver /api/sync/schema-info).
+          await farmatic.fetchListasWizard()
+            .then(listasActualizadas => api.enviarSchemaInfo({ listas: listasActualizadas }))
+            .catch(e => warn('No se pudo actualizar la estructura tras crear listas: ' + e.message));
         }
         if (resultado.fallos_creacion?.length) {
           warn(`No se pudieron crear ${resultado.fallos_creacion.length} listas de categoría: ${resultado.fallos_creacion.join('; ')}`);
