@@ -1140,13 +1140,27 @@ async function fetchFavoritosActuales() {
     }
   }
   const p   = await getPool();
+  const cdb = CONSEJO_DB();
+  // ch = grupo homogéneo OFICIAL (CODConjunto del Consejo General, el mismo que usa todo
+  // el resto del SaaS vía cns.ch/grupos_homogeneos.ch — ver fetchProductos()) — NUNCA
+  // GeneArti.IdGrupoGen, que es una agrupación interna y propietaria de Farmatic con su
+  // propia numeración, completamente distinta e incompatible con la del Consejo (bug real
+  // encontrado en jose-2: favoritos guardados con IdGrupoGen no encajaban con ningún grupo
+  // real, y en 2 casos coincidían por pura casualidad numérica con OTRO grupo distinto).
+  // Si el CN no tiene CODConjunto (no todo producto pertenece a un grupo homogéneo oficial
+  // — típico en jose/jose-2, con ~70-90% del catálogo sin CODConjunto), se sintetiza un
+  // "ch" negativo único a partir del propio CN — nunca colisiona con un ch real (siempre
+  // positivo) y permite que sembrarFavoritosReales() lo detecte como "sin categoría
+  // calculable" y lo meta en RESTO en vez de perder el favorito real del titular.
   if (tablaGenerica) {
     try {
       const r = await p.request().query(`
-        SELECT t.${tablaGenerica.columna} AS cn, g.IdGrupoGen AS ch
+        SELECT t.${tablaGenerica.columna} AS cn,
+               COALESCE(bpc.CODConjunto, -CAST(t.${tablaGenerica.columna} AS INT)) AS ch
         FROM ${tablaGenerica.tabla} t
-        JOIN GeneArti g ON CAST(g.IdArticu AS VARCHAR) = CAST(t.${tablaGenerica.columna} AS VARCHAR)
-        WHERE g.IdGrupoGen IS NOT NULL AND g.IdGrupoGen > 0
+        LEFT JOIN ${cdb}.dbo.BP_CONJARTI bpc
+          ON LTRIM(RTRIM(bpc.CODIGO)) = LTRIM(RTRIM(CAST(t.${tablaGenerica.columna} AS VARCHAR)))
+          AND bpc.CODCCAA = 0
       `);
       const porGH = new Map();
       for (const row of r.recordset) {
@@ -1161,10 +1175,13 @@ async function fetchFavoritosActuales() {
   const ids  = lcat ? Object.keys(lcat).join(',') : String(idUnica);
   try {
     const result = await p.request().query(`
-      SELECT i.XItem_IdLista AS lista, i.XItem_IdArticu AS cn, g.IdGrupoGen AS ch
+      SELECT i.XItem_IdLista AS lista, i.XItem_IdArticu AS cn,
+             COALESCE(bpc.CODConjunto, -CAST(i.XItem_IdArticu AS INT)) AS ch
       FROM ItemListaArticu i
-      INNER JOIN GeneArti g ON CAST(g.IdArticu AS VARCHAR) = CAST(i.XItem_IdArticu AS VARCHAR)
-      WHERE i.XItem_IdLista IN (${ids}) AND g.IdGrupoGen IS NOT NULL AND g.IdGrupoGen > 0
+      LEFT JOIN ${cdb}.dbo.BP_CONJARTI bpc
+        ON LTRIM(RTRIM(bpc.CODIGO)) = LTRIM(RTRIM(CAST(i.XItem_IdArticu AS VARCHAR)))
+        AND bpc.CODCCAA = 0
+      WHERE i.XItem_IdLista IN (${ids})
     `);
     const PRIORIDAD = lcat ? Object.keys(lcat).map(Number).sort((a, b) => a - b) : [idUnica];
     const porGH     = new Map();
@@ -1394,7 +1411,12 @@ async function sembrarFavoritosReales(categoriasActuales, favoritosReales) {
 
   let favoritosCreados = 0;
   for (const [ch, cn] of favoritosPorCh) {
-    const listaId = listaIdPorCategoria.get(categoriaPorCh.get(ch));
+    // Si el ch no tiene categoría calculada (grupo homogéneo oficial no reconocido por el
+    // SaaS, o "ch" sintético de un favorito real sin CODConjunto — ver fetchFavoritosActuales)
+    // no se descarta el favorito: Farmatic ya lo reconoce con su propia agrupación interna al
+    // dispensar, así que se guarda en RESTO en vez de perderlo.
+    const categoria = categoriaPorCh.get(ch) || 'RESTO';
+    const listaId = listaIdPorCategoria.get(categoria);
     if (!listaId) continue;
     try {
       await p.request()
@@ -1426,11 +1448,17 @@ async function completarFavoritosConMasVendido(categoriasActuales) {
   const listaIds = Object.keys(lcat).map(Number).filter(Number.isFinite);
   if (!listaIds.length) return null;
 
+  const cdb = CONSEJO_DB();
+  // ch = CODConjunto oficial del Consejo (igual que en fetchFavoritosActuales), no
+  // GeneArti.IdGrupoGen — aquí SIN COALESCE/sintético: esta fase solo tiene sentido dentro
+  // de un grupo homogéneo oficial real (no hay "más vendido del grupo" si no hay grupo).
   const yaCubiertosR = await p.request().query(`
-    SELECT DISTINCT g.IdGrupoGen AS ch
+    SELECT DISTINCT bpc.CODConjunto AS ch
     FROM ItemListaArticu i
-    JOIN GeneArti g ON CAST(g.IdArticu AS VARCHAR) = CAST(i.XItem_IdArticu AS VARCHAR)
-    WHERE i.XItem_IdLista IN (${listaIds.join(',')}) AND g.IdGrupoGen IS NOT NULL
+    JOIN ${cdb}.dbo.BP_CONJARTI bpc
+      ON LTRIM(RTRIM(bpc.CODIGO)) = LTRIM(RTRIM(CAST(i.XItem_IdArticu AS VARCHAR)))
+      AND bpc.CODCCAA = 0
+    WHERE i.XItem_IdLista IN (${listaIds.join(',')})
   `).catch(() => ({ recordset: [] }));
   const yaCubiertos = new Set(yaCubiertosR.recordset.map(r => Number(r.ch)));
 
@@ -1447,17 +1475,19 @@ async function completarFavoritosConMasVendido(categoriasActuales) {
   // podía quedar sembrado como favorito inicial de una farmacia nueva.
   const topR = await p.request().query(`
     SELECT ch, cn FROM (
-      SELECT g.IdGrupoGen AS ch, lv.Codigo AS cn, SUM(lv.Cantidad) AS uds,
-        ROW_NUMBER() OVER (PARTITION BY g.IdGrupoGen ORDER BY SUM(lv.Cantidad) DESC) AS rn
+      SELECT bpc.CODConjunto AS ch, lv.Codigo AS cn, SUM(lv.Cantidad) AS uds,
+        ROW_NUMBER() OVER (PARTITION BY bpc.CODConjunto ORDER BY SUM(lv.Cantidad) DESC) AS rn
       FROM LineaVenta lv
       INNER JOIN Venta v ON v.IdVenta = lv.IdVenta
       INNER JOIN GeneArti g ON CAST(g.IdArticu AS VARCHAR) = CAST(lv.Codigo AS VARCHAR)
+      INNER JOIN ${cdb}.dbo.BP_CONJARTI bpc
+        ON LTRIM(RTRIM(bpc.CODIGO)) = LTRIM(RTRIM(CAST(lv.Codigo AS VARCHAR)))
+        AND bpc.CODCCAA = 0
       WHERE (v.Ejercicio * 100 + v.Mes) >= ${cutoff}
         AND ${fac.filtro} ${exclClause}
         AND lv.Cantidad > 0
-        AND g.IdGrupoGen IS NOT NULL AND g.IdGrupoGen > 0
         AND g.EFG = 1
-      GROUP BY g.IdGrupoGen, lv.Codigo
+      GROUP BY bpc.CODConjunto, lv.Codigo
     ) t
     WHERE rn = 1
   `).catch(err => { log.warn('Top CN por grupo (completar favoritos) falló:', err.message); return { recordset: [] }; });
