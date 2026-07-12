@@ -1396,6 +1396,20 @@ function valorSeguroPorTipo(tipoSql) {
   return null;
 }
 
+// Tipo mssql para ligar como parámetro un valor ya existente (copiado de una fila de
+// referencia o de una tabla referenciada por FK) — a diferencia de valorSeguroPorTipo (que
+// genera un literal SQL de emergencia), aquí el valor es un dato real que hay que mandar tal
+// cual, con el tipo correcto para que SQL Server no lo rechace por conversión.
+function sqlTipoBind(tipoSql) {
+  const t = String(tipoSql || '').toLowerCase();
+  if (['int', 'smallint', 'tinyint', 'bigint'].includes(t)) return sql.Int;
+  if (t === 'bit') return sql.Bit;
+  if (['decimal', 'numeric', 'float', 'real', 'money', 'smallmoney'].includes(t)) return sql.Decimal;
+  if (['datetime', 'datetime2', 'date', 'smalldatetime', 'datetimeoffset'].includes(t)) return sql.DateTime;
+  if (t === 'uniqueidentifier') return sql.UniqueIdentifier;
+  return sql.VarChar;
+}
+
 // A partir de INFORMATION_SCHEMA.COLUMNS (con IS_NULLABLE/COLUMN_DEFAULT), qué columnas hay
 // que rellenar sí o sí en un INSERT — NOT NULL, sin default, y no ya cubiertas a mano
 // (identity, la columna de nombre, o las que ya se van a insertar explícitamente). Sustituye
@@ -1412,14 +1426,18 @@ function columnasObligatorias(colsInfo, yaCubiertas) {
 // Intenta el INSERT y, si SQL Server lo rechaza por una columna NOT NULL que
 // columnasObligatorias no había detectado (metadata desactualizada, columna añadida después
 // del barrido de esquema…), parsea el nombre de esa columna del propio mensaje de error de
-// SQL Server ("Cannot insert the value NULL into column 'X'…") y reintenta UNA vez añadiéndola
-// — red de seguridad además del chequeo proactivo, no en vez de él.
+// SQL Server ("Cannot insert the value NULL into column 'X'…") y reintenta añadiéndola — red
+// de seguridad además del chequeo proactivo, no en vez de él. Hasta 5 columnas nuevas
+// descubiertas así en una misma llamada (instalaciones reales pueden tener varias columnas
+// NOT NULL que la metadata no reflejaba bien) — para la MISMA columna solo se prueba una vez;
+// si vuelve a fallar (p.ej. un CHECK o FOREIGN KEY que un valor genérico no puede satisfacer),
+// se rinde y devuelve el error de SQL Server tal cual para que quede reportado.
 async function insertarConReintentoPorColumna(p, tabla, colsInfo, columnasBase, valoresBase, params, opts = {}) {
   const { outputCol, guardSql } = opts;
   let columnas = [...columnasBase];
   let valores  = [...valoresBase];
-  const yaIncluidas = new Set(columnas);
-  for (let intento = 0; intento < 2; intento++) {
+  const yaProbadas = new Set(columnas);
+  for (let intento = 0; intento < 6; intento++) {
     const req = p.request();
     for (const prm of params) req.input(prm.nombre, prm.tipo, prm.valor);
     try {
@@ -1431,15 +1449,43 @@ async function insertarConReintentoPorColumna(p, tabla, colsInfo, columnasBase, 
       const colFaltante = /column '([^']+)'/i.exec(err.message)?.[1];
       const info = colFaltante && colsInfo.find(c => c.COLUMN_NAME === colFaltante);
       const valorExtra = info && valorSeguroPorTipo(info.DATA_TYPE);
-      if (intento === 0 && colFaltante && !yaIncluidas.has(colFaltante) && valorExtra != null) {
+      if (colFaltante && !yaProbadas.has(colFaltante) && valorExtra != null) {
         columnas.push(colFaltante);
         valores.push(valorExtra);
-        yaIncluidas.add(colFaltante);
+        yaProbadas.add(colFaltante);
         continue;
       }
       return { ok: false, error: err.message };
     }
   }
+  return { ok: false, error: `Se agotaron los reintentos de columnas para ${tabla}` };
+}
+
+// Si una columna obligatoria es además clave foránea, un valor genérico (0, NEWID()…) casi
+// siempre viola la FK — en vez de adivinar, se busca un valor real ya existente en la tabla
+// referenciada. `topValoresFk` cachea por (tabla,columna) dentro de un mismo sync para no
+// repetir la consulta en cada lista creada.
+const cacheValoresFk = new Map();
+async function valorFkExistente(p, tablaRef, columnaRef) {
+  const clave = `${tablaRef}.${columnaRef}`;
+  if (cacheValoresFk.has(clave)) return cacheValoresFk.get(clave);
+  const r = await p.request().query(`SELECT TOP 1 ${columnaRef} AS v FROM ${tablaRef}`).catch(() => ({ recordset: [] }));
+  const v = r.recordset[0]?.v ?? null;
+  cacheValoresFk.set(clave, v);
+  return v;
+}
+
+async function obtenerForeignKeys(p, tabla) {
+  const r = await p.request().query(`
+    SELECT c.name AS columna, rt.name AS tabla_ref, rc.name AS columna_ref
+    FROM sys.foreign_keys fk
+    JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
+    JOIN sys.columns c  ON c.object_id  = fkc.parent_object_id     AND c.column_id  = fkc.parent_column_id
+    JOIN sys.tables  rt ON rt.object_id = fk.referenced_object_id
+    JOIN sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id
+    WHERE fk.parent_object_id = OBJECT_ID('${tabla}')
+  `).catch(() => ({ recordset: [] }));
+  return r.recordset;
 }
 
 // Genérico: crea (si faltan) las listas de un "esquema" bucket→env var — usado tanto para
@@ -1458,7 +1504,7 @@ async function asegurarListas(envMap) {
     return { omitida: true, motivo };
   }
   const colsR = await p.request().query(
-    `SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'ListaArticu'`
+    `SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT, CHARACTER_MAXIMUM_LENGTH FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'ListaArticu'`
   ).catch(() => ({ recordset: [] }));
   const colsInfo = colsR.recordset;
   const cols = new Set(colsInfo.map(r => String(r.COLUMN_NAME)));
@@ -1487,17 +1533,61 @@ async function asegurarListas(envMap) {
   // detectan directamente por metadata (columnasObligatorias) y se rellenan con un valor
   // seguro según su tipo. El reintento por error (insertarConReintentoPorColumna) cubre
   // además cualquier NOT NULL que la metadata no reflejara.
-  const obligatorias   = columnasObligatorias(colsInfo, new Set(['IdLista', colNombre]));
-  const columnasBase = [colNombre, ...obligatorias.map(c => c.nombre)];
-  const valoresBase  = ['@nombre', ...obligatorias.map(c => c.valor)];
+  const obligatorias = columnasObligatorias(colsInfo, new Set(['IdLista', colNombre]));
+
+  // Antes de adivinar por tipo, se mira si ya existe una lista real en Farmatic (una propia
+  // de la farmacia, o una "NextFarma - X" creada en un ciclo anterior) y se copian sus
+  // valores para las columnas obligatorias — un valor que YA está en una fila real es, por
+  // definición, válido para cualquier CHECK/FOREIGN KEY que tenga la tabla, sin necesidad de
+  // conocer esas restricciones de antemano. Si no hay ninguna fila (instalación sin listas
+  // todavía), se cae a mirar si la columna es una FK con datos en la tabla referenciada, y
+  // en último caso a un valor genérico por tipo (valorSeguroPorTipo).
+  const referenciaR = await p.request().query(`SELECT TOP 1 * FROM ListaArticu`).catch(() => ({ recordset: [] }));
+  const filaReferencia = referenciaR.recordset[0] || null;
+  const fks = await obtenerForeignKeys(p, 'ListaArticu');
+  const fkPorColumna = new Map(fks.map(f => [f.columna, f]));
+
+  const obligatoriasResueltas = [];
+  for (const c of obligatorias) {
+    const info = colsInfo.find(ci => ci.COLUMN_NAME === c.nombre);
+    if (filaReferencia && filaReferencia[c.nombre] != null) {
+      obligatoriasResueltas.push({ ...c, valorReal: filaReferencia[c.nombre], tipoBind: sqlTipoBind(info?.DATA_TYPE) });
+      continue;
+    }
+    const fk = fkPorColumna.get(c.nombre);
+    if (fk) {
+      const real = await valorFkExistente(p, fk.tabla_ref, fk.columna_ref);
+      if (real != null) { obligatoriasResueltas.push({ ...c, valorReal: real, tipoBind: sqlTipoBind(info?.DATA_TYPE) }); continue; }
+    }
+    obligatoriasResueltas.push(c); // sin fila de referencia ni FK con datos — valor genérico por tipo
+  }
+
+  // La columna de nombre puede tener menos hueco del que ocupa "NextFarma - CATEGORIA" —
+  // se recorta al límite real en vez de arriesgarse a un truncamiento que a veces ni siquiera
+  // nombra la columna en el mensaje de error (no se podría reintentar sobre eso).
+  const maxNombre = colsInfo.find(c => c.COLUMN_NAME === colNombre)?.CHARACTER_MAXIMUM_LENGTH;
+
+  const columnasBase = [colNombre, ...obligatoriasResueltas.map(c => c.nombre)];
 
   const creadas = [];
   const fallos = [];
   const faltantes = Object.keys(envMap).filter(bucket => !process.env[envMap[bucket]]);
   for (const bucket of faltantes) {
+    const nombreLista = `NextFarma - ${bucket}`;
+    const nombreAjustado = (maxNombre > 0 && nombreLista.length > maxNombre)
+      ? nombreLista.slice(0, maxNombre) : nombreLista;
     const columnas = [...columnasBase];
-    const valores  = [...valoresBase];
-    const params   = [{ nombre: 'nombre', tipo: sql.VarChar, valor: `NextFarma - ${bucket}` }];
+    const valores  = ['@nombre'];
+    const params   = [{ nombre: 'nombre', tipo: sql.VarChar, valor: nombreAjustado }];
+    obligatoriasResueltas.forEach((c, i) => {
+      if (c.valorReal != null) {
+        const pname = `real${i}`;
+        valores.push(`@${pname}`);
+        params.push({ nombre: pname, tipo: c.tipoBind, valor: c.valorReal });
+      } else {
+        valores.push(c.valor);
+      }
+    });
     if (!esIdentity) {
       const siguienteR = await p.request().query(`SELECT ISNULL(MAX(IdLista), 0) + 1 AS siguiente FROM ListaArticu`)
         .catch(() => ({ recordset: [{ siguiente: null }] }));
