@@ -177,7 +177,7 @@ async function obtenerConfigSync() {
     return await request('/api/sync/config');
   } catch (err) {
     log.warn('obtenerConfigSync falló:', err.message);
-    return { farmatic_write_enabled: false, farmatic_autocrear_listas: false };
+    return { farmatic_write_enabled: false, farmatic_autocrear_listas: false, farmatic_ventas_solo_reciente: false };
   }
 }
 

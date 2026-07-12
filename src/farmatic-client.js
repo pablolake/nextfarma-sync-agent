@@ -516,13 +516,35 @@ async function detectarFiltroFacturada(p) {
   return { col: null, filtro: '1 = 1' };
 }
 
-async function fetchVentasMensuales(anio) {
+// Últimos `n` meses (incluido el actual) como pares {ejercicio, mes} — p.ej. n=2 en marzo de
+// 2026 devuelve [{2026,3},{2026,2}], y en enero de 2026 devuelve [{2026,1},{2025,12}] (cruza
+// de año correctamente). Usado por fetchVentasMensuales() cuando farmatic_ventas_solo_reciente
+// está activado, para no releer los 2 años completos en cada sync.
+function ventanaMesesRecientes(n) {
+  const out = [];
+  const hoy = new Date();
+  for (let i = 0; i < n; i++) {
+    const d = new Date(hoy.getFullYear(), hoy.getMonth() - i, 1);
+    out.push({ ejercicio: d.getFullYear(), mes: d.getMonth() + 1 });
+  }
+  return out;
+}
+
+async function fetchVentasMensuales(anio, opts = {}) {
   const p   = await getPool();
   const fac = await detectarFiltroFacturada(p);
   if (!fac.col) log.warn('No se detectó columna Facturada; se leen todas las ventas');
 
   const excl      = excludedVendors();
   const exclClause = excl.length ? `AND v.XVend_IdVendedor NOT IN (${excl.join(',')})` : '';
+
+  // mesesRecientes: subconjunto de ventanaMesesRecientes() que cae en `anio` — si se pasa un
+  // array vacío, ese año no aporta nada a la ventana y no hace falta ni consultar Farmatic.
+  const { mesesRecientes } = opts;
+  if (mesesRecientes && !mesesRecientes.length) return [];
+  const filtroMeses = mesesRecientes?.length
+    ? `AND v.Mes IN (${mesesRecientes.map(m => m.mes).join(',')})`
+    : '';
 
   const result = await p.request()
     .input('anio', sql.Int, anio)
@@ -540,6 +562,7 @@ async function fetchVentasMensuales(anio) {
         AND ${fac.filtro}
         AND lv.Cantidad > 0
         AND lv.Codigo IS NOT NULL AND lv.Codigo != ''
+        ${filtroMeses}
         ${exclClause}
       GROUP BY LTRIM(RTRIM(lv.Codigo)), v.Ejercicio, v.Mes, v.XVend_IdVendedor
     `).catch(err => { log.warn('fetchVentasMensuales falló:', err.message); return { recordset: [] }; });
@@ -2023,6 +2046,7 @@ module.exports = {
   fetchProductos,
   fetchVentasAnuales,
   fetchVentasMensuales,
+  ventanaMesesRecientes,
   fetchRecepcionesRecientes,
   fetchFavoritosListas,
   fetchFavoritosActuales,

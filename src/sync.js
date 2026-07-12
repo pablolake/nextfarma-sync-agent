@@ -304,15 +304,25 @@ async function runSync(opts = {}) {
   };
 
   // ── PASO 2: Leer ventas de Farmatic ─────────────────────────────────
+  // farmatic_ventas_solo_reciente (activado a mano por tenant, ver ensureTenantsWriteFlag en
+  // nextfarma-api): por defecto se releen los 2 años completos cada ciclo, aunque la inmensa
+  // mayoría de esos meses ya están cerrados y no cambian de un sync al siguiente — pensado
+  // para activarse solo cuando ya exista un histórico completo en ventas_mes (un primer sync
+  // sin este flag, o activarlo más tarde). Con el flag activo, solo se releen los últimos 2
+  // meses (ventanaMesesRecientes) — cubre el mes en curso y dEja margen para ventas del mes
+  // anterior que Farmatic registre con retraso.
   step('ventas', 'Leyendo ventas de Farmatic…', 'running');
   log.warn = warnProxy;
   try {
-    const vActual   = await farmatic.fetchVentasMensuales(anioActual);
-    const vAnterior = await farmatic.fetchVentasMensuales(anioAnterior);
+    const cfgVentas = await api.obtenerConfigSync();
+    const ventana = cfgVentas.farmatic_ventas_solo_reciente ? farmatic.ventanaMesesRecientes(2) : null;
+    const vActual   = await farmatic.fetchVentasMensuales(anioActual,   { mesesRecientes: ventana?.filter(m => m.ejercicio === anioActual) });
+    const vAnterior = await farmatic.fetchVentasMensuales(anioAnterior, { mesesRecientes: ventana?.filter(m => m.ejercicio === anioAnterior) });
     todasVentas = [...vActual, ...vAnterior];
-    ok(`Ventas: ${vActual.length} (${anioActual}) + ${vAnterior.length} (${anioAnterior})`);
+    const etiquetaVentana = ventana ? ' (solo meses recientes)' : '';
+    ok(`Ventas: ${vActual.length} (${anioActual}) + ${vAnterior.length} (${anioAnterior})${etiquetaVentana}`);
     if (sinFiltroFacturada) warn('Columna Facturada no detectada en Farmatic — ventas incluyen borradores/anulados');
-    step('ventas', `Ventas: ${vActual.length} este año · ${vAnterior.length} año anterior`, 'ok');
+    step('ventas', `Ventas: ${vActual.length} este año · ${vAnterior.length} año anterior${etiquetaVentana}`, 'ok');
   } catch (e) {
     warn('Ventas no disponibles: ' + e.message + ' — Los análisis de ventas no se actualizarán.');
     step('ventas', 'Ventas no disponibles — análisis de ventas omitido. Verifica la tabla Venta/LineaVenta en Farmatic.', 'warn');
