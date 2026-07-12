@@ -888,6 +888,7 @@ const COLOR_ENV = {
   verde:    'LIST_COLOR_VERDE',
   amarillo: 'LIST_COLOR_AMARILLO',
   gris:     'LIST_COLOR_GRIS',
+  negro:    'LIST_COLOR_NEGRO',
 };
 
 // Categorías que ni la config guardada ni la detección por nombre han resuelto todavía
@@ -1689,9 +1690,81 @@ function sembrarFavoritosReales(categoriasActuales, favoritosReales) {
   const categoriaPorCh = new Map((categoriasActuales || []).map(r => [Number(r.ch), r.categoria]));
   return sembrarFavoritosEnListas(asegurarListasCategoria, categoriaPorCh, favoritosReales, 'RESTO', 'categoría');
 }
-function sembrarFavoritosColor(coloresActuales, favoritosReales) {
+
+// A diferencia de la categoría (una elección congelada del titular, nunca se recalcula sola
+// — ver sembrarFavoritosReales), el color es un dato derivado del descuento (dto) del
+// favorito, que puede cambiar de un ciclo a otro sin que nadie elija nada. Aquí no basta con
+// "insertar si falta": cada ciclo hay que
+// comprobar si el CN ya está en OTRA lista de color (porque cambió desde el ciclo anterior)
+// y, si es así, quitarlo de ahí antes de meterlo en la que le corresponde ahora — si no, un
+// CN que pasa de verde a gris se quedaría "duplicado" en las dos listas para siempre.
+async function reconciliarFavoritosColor(coloresActuales, favoritosReales) {
+  const aseguradas = await asegurarListasColor();
+  if (aseguradas.omitida) return aseguradas;
+  const { creadas, fallos, listaIdPorBucket } = aseguradas;
+  const p = await getPool();
+
+  const favoritosPorCh = favoritosReales instanceof Map ? favoritosReales : new Map();
   const colorPorCh = new Map((coloresActuales || []).map(r => [Number(r.ch), r.color]));
-  return sembrarFavoritosEnListas(asegurarListasColor, colorPorCh, favoritosReales, 'gris', 'color');
+  const todasLasListasColor = [...listaIdPorBucket.values()];
+
+  const itemColsR = favoritosPorCh.size
+    ? await p.request().query(
+        `SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'ItemListaArticu'`
+      ).catch(() => ({ recordset: [] }))
+    : { recordset: [] };
+  const itemColsInfo = itemColsR.recordset;
+  const itemObligatorias = columnasObligatorias(itemColsInfo, new Set(['XItem_IdLista', 'XItem_IdArticu']));
+  const itemColumnasBase = ['XItem_IdLista', 'XItem_IdArticu', ...itemObligatorias.map(c => c.nombre)];
+  const itemValoresBase  = ['@lista', '@cn', ...itemObligatorias.map(c => c.valor)];
+
+  let favoritosCreados = 0;
+  let favoritosMovidos = 0;
+  let favoritosSinLista = 0;
+  const fallosSiembra = [];
+  for (const [ch, cn] of favoritosPorCh) {
+    const bucket  = colorPorCh.get(ch) || 'gris';
+    const listaId = listaIdPorBucket.get(bucket);
+    if (!listaId) { favoritosSinLista++; continue; }
+
+    const otras = todasLasListasColor.filter(id => id !== listaId);
+    if (otras.length) {
+      try {
+        const actualR = await p.request()
+          .input('cn', sql.Int, cn)
+          .query(`SELECT XItem_IdLista FROM ItemListaArticu WHERE XItem_IdArticu = @cn AND XItem_IdLista IN (${otras.join(',')})`);
+        for (const row of actualR.recordset) {
+          await p.request()
+            .input('lista', sql.Int, row.XItem_IdLista)
+            .input('cn',    sql.Int, cn)
+            .query(`DELETE FROM ItemListaArticu WHERE XItem_IdLista = @lista AND XItem_IdArticu = @cn`);
+          favoritosMovidos++;
+        }
+      } catch (err) {
+        log.warn(`No se pudo comprobar/mover CH ${ch} entre listas de color:`, err.message);
+      }
+    }
+
+    const resultado = await insertarConReintentoPorColumna(
+      p, 'ItemListaArticu', itemColsInfo, itemColumnasBase, itemValoresBase,
+      [{ nombre: 'lista', tipo: sql.Int, valor: listaId }, { nombre: 'cn', tipo: sql.Int, valor: cn }],
+      { guardSql: 'IF NOT EXISTS (SELECT 1 FROM ItemListaArticu WHERE XItem_IdLista = @lista AND XItem_IdArticu = @cn) ' }
+    );
+    if (resultado.ok) {
+      favoritosCreados++;
+    } else {
+      log.warn(`No se pudo sembrar favorito real de CH ${ch} (color):`, resultado.error);
+      fallosSiembra.push(`CH ${ch}: ${resultado.error}`);
+    }
+  }
+  if (creadas.length) log.info(`✓ Listas de color creadas en Farmatic: ${creadas.length}`);
+  if (favoritosCreados > 0) log.info(`✓ Favoritos reales sembrados (color): ${favoritosCreados}`);
+  if (favoritosMovidos > 0) log.info(`✓ Favoritos movidos de lista de color: ${favoritosMovidos}`);
+  return {
+    creadas, fallos_creacion: fallos, favoritos_creados: favoritosCreados,
+    favoritos_totales: favoritosPorCh.size, favoritos_sin_lista: favoritosSinLista,
+    favoritos_movidos: favoritosMovidos, fallos_siembra: fallosSiembra,
+  };
 }
 
 // Fase B — al FINAL del sync (con las ventas de este ciclo ya subidas): para los grupos
@@ -2170,7 +2243,7 @@ module.exports = {
   resolverAtributoColumna,
   resolverAtributoTabla,
   sembrarFavoritosReales,
-  sembrarFavoritosColor,
+  reconciliarFavoritosColor,
   completarFavoritosConMasVendido,
   discoverSchema,
   discoverDataQuality,

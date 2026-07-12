@@ -266,7 +266,7 @@ async function runSync(opts = {}) {
     const cfgTenant = await api.obtenerConfigSync();
     if (cfgTenant.farmatic_write_enabled && cfgTenant.farmatic_autocrear_listas) {
       const colores = await api.obtenerColoresActuales();
-      const resultadoColor = await farmatic.sembrarFavoritosColor(colores, favActuales);
+      const resultadoColor = await farmatic.reconciliarFavoritosColor(colores, favActuales);
       if (resultadoColor?.omitida) {
         warn('Auto-creación de listas de color omitida: ' + resultadoColor.motivo);
       } else {
@@ -283,6 +283,9 @@ async function runSync(opts = {}) {
         }
         if (resultadoColor.favoritos_creados > 0) {
           ok(`Favoritos reales sembrados por color en Farmatic: ${resultadoColor.favoritos_creados} de ${resultadoColor.favoritos_totales}`);
+        }
+        if (resultadoColor.favoritos_movidos > 0) {
+          ok(`Favoritos movidos de lista de color (cambió su color desde el último ciclo): ${resultadoColor.favoritos_movidos}`);
         }
         if (resultadoColor.fallos_siembra?.length) {
           warn(`Fallos al sembrar ${resultadoColor.fallos_siembra.length} favoritos por color: ${resultadoColor.fallos_siembra.slice(0, 5).join('; ')}${resultadoColor.fallos_siembra.length > 5 ? '…' : ''}`);

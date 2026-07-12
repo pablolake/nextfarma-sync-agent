@@ -126,6 +126,15 @@ async function enviarSchemaInfo(schema) {
   }
 }
 
+async function reportarCoberturaCatalogo(cobertura) {
+  try {
+    return await request('/api/sync/cobertura-catalogo', { method: 'POST', body: cobertura });
+  } catch (err) {
+    log.warn('reportarCoberturaCatalogo falló:', err.message);
+    return { ok: false };
+  }
+}
+
 async function getCambiosPendientes(tenantId) {
   return request(`/api/${tenantId}/cambios-pendientes`);
 }
@@ -298,6 +307,7 @@ module.exports = {
   getVendedoresPendientes,
   marcarVendedoresPendientesProcesados,
   enviarSchemaInfo,
+  reportarCoberturaCatalogo,
   obtenerConfigSync,
   obtenerCategoriasActuales,
   obtenerColoresActuales,

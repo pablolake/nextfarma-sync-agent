@@ -59,6 +59,7 @@ function applyConfig(cfg) {
   if (w.listColorVerde)              process.env.LIST_COLOR_VERDE       = String(w.listColorVerde);
   if (w.listColorAmarillo)           process.env.LIST_COLOR_AMARILLO    = String(w.listColorAmarillo);
   if (w.listColorGris)               process.env.LIST_COLOR_GRIS        = String(w.listColorGris);
+  if (w.listColorNegro)              process.env.LIST_COLOR_NEGRO       = String(w.listColorNegro);
   if (w.listNegra)                   process.env.LIST_NEGRA             = String(w.listNegra);
   if (w.scUmbral)                    process.env.SC_UMBRAL              = String(w.scUmbral);
   if (w.opcRGPD)                     process.env.RGPD_OPCION            = String(w.opcRGPD);
@@ -99,7 +100,7 @@ async function runSyncOnce() {
         CONSOLIDADO:       'listConsolidado',
       };
       const COLOR_A_CAMPO = {
-        verde: 'listColorVerde', amarillo: 'listColorAmarillo', gris: 'listColorGris',
+        verde: 'listColorVerde', amarillo: 'listColorAmarillo', gris: 'listColorGris', negro: 'listColorNegro',
       };
       const cfg = store.get('config', {});
       cfg.wizard = cfg.wizard || {};
