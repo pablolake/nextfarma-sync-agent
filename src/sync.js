@@ -360,10 +360,11 @@ async function runSync(opts = {}) {
   }
 
   // Priority 1: 4DB (Cofares Conecta 4D) — most accurate, normalized to decimal in farmatic-client
+  let map4DB = new Map();
   try {
     const datos4DB = await farmatic.fetch4DBDescuentos();
     if (datos4DB.length > 0) {
-      const map4DB = new Map(datos4DB.map(d => [d.codigo_nacional, d]));
+      map4DB = new Map(datos4DB.map(d => [d.codigo_nacional, d]));
       let n4db = 0;
       for (const prod of productos) {
         const d = map4DB.get(prod.codigo_nacional);
@@ -393,6 +394,35 @@ async function runSync(opts = {}) {
       nRecep++;
     }
     if (nRecep > 0) log.info(`✓ LineaRecep fallback: ${nRecep} productos con dto de albarán`);
+  }
+
+  // Diagnóstico de cobertura: cuántos productos se quedan sin dto o sin grupo homogéneo tras
+  // las 3 fuentes, y por qué — antes había que pedirle al cliente una query a mano contra
+  // _4DB_CAT_CatalogoArt/Consejo cada vez que un CN concreto "no salía". Se manda al backend
+  // (visible en el panel de admin) y se deja constancia en el log local también.
+  if (productos.length > 0) {
+    try {
+      const sinDto = productos.filter(p => !(p.dto > 0));
+      const sinDtoNi4db = sinDto.filter(p => !map4DB.has(p.codigo_nacional));
+      const sinDtoEn4dbCero = sinDto.length - sinDtoNi4db.length;
+      const sinGH = productos.filter(p => !p.codigo_gh);
+      const ejemplo = prod => ({ cn: prod.codigo_nacional, nombre: prod.nombre, laboratorio: prod.laboratorio });
+      const resultadoCobertura = await api.reportarCoberturaCatalogo({
+        sin_dto: {
+          total: sinDto.length, sin_4db: sinDtoNi4db.length, en_4db_pero_cero: sinDtoEn4dbCero,
+          ejemplos: sinDtoNi4db.slice(0, 50).map(ejemplo),
+        },
+        sin_grupo_homogeneo: {
+          total: sinGH.length, ejemplos: sinGH.slice(0, 50).map(ejemplo),
+        },
+      });
+      if (!resultadoCobertura?.ok) {
+        warn('No se pudo enviar el diagnóstico de cobertura de catálogo al panel de admin');
+      }
+      log.info(`Cobertura: ${sinDto.length} sin dto (${sinDtoNi4db.length} ni en 4DB, ${sinDtoEn4dbCero} en 4DB con 0%) · ${sinGH.length} sin grupo homogéneo (Consejo)`);
+    } catch (e) {
+      warn('Diagnóstico de cobertura omitido: ' + e.message);
+    }
   }
 
   if (todasVentas.length > 0 && productos.length > 0) {
