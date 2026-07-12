@@ -1474,11 +1474,12 @@ async function asegurarListas(envMap) {
   const identityR = await p.request().query(
     `SELECT COLUMNPROPERTY(OBJECT_ID('ListaArticu'), 'IdLista', 'IsIdentity') AS es_identity`
   ).catch(() => ({ recordset: [] }));
-  if (identityR.recordset[0]?.es_identity !== 1) {
-    const motivo = 'ListaArticu.IdLista no es autonumérico, no se puede generar un id seguro';
-    log.warn('Auto-creación de listas omitida: ' + motivo);
-    return { omitida: true, motivo };
-  }
+  // Caso real visto en Jose-2: IdLista es un INT PRIMARY KEY normal, NO autonumérico — antes
+  // esto hacía renunciar a crear listas por completo. En vez de exigir identity, si no lo es
+  // se calcula a mano el siguiente id libre (MAX(IdLista)+1) antes de cada INSERT — se
+  // recalcula en cada vuelta del bucle, así que ve el id recién insertado de la lista
+  // anterior dentro de este mismo ciclo (nunca colisiona consigo mismo).
+  const esIdentity = identityR.recordset[0]?.es_identity === 1;
 
   // ListaArticu suele tener más columnas que Nombre/Descripcion (caso real visto en Jose-2:
   // Fecha, NumElem, Tipo, EnviarGrupo) — el barrido de esquema no captura si son NOT NULL sin
@@ -1487,16 +1488,31 @@ async function asegurarListas(envMap) {
   // seguro según su tipo. El reintento por error (insertarConReintentoPorColumna) cubre
   // además cualquier NOT NULL que la metadata no reflejara.
   const obligatorias   = columnasObligatorias(colsInfo, new Set(['IdLista', colNombre]));
-  const columnasInsert = [colNombre, ...obligatorias.map(c => c.nombre)];
-  const valoresInsert  = ['@nombre', ...obligatorias.map(c => c.valor)];
+  const columnasBase = [colNombre, ...obligatorias.map(c => c.nombre)];
+  const valoresBase  = ['@nombre', ...obligatorias.map(c => c.valor)];
 
   const creadas = [];
   const fallos = [];
   const faltantes = Object.keys(envMap).filter(bucket => !process.env[envMap[bucket]]);
   for (const bucket of faltantes) {
+    const columnas = [...columnasBase];
+    const valores  = [...valoresBase];
+    const params   = [{ nombre: 'nombre', tipo: sql.VarChar, valor: `NextFarma - ${bucket}` }];
+    if (!esIdentity) {
+      const siguienteR = await p.request().query(`SELECT ISNULL(MAX(IdLista), 0) + 1 AS siguiente FROM ListaArticu`)
+        .catch(() => ({ recordset: [{ siguiente: null }] }));
+      const siguienteId = siguienteR.recordset[0]?.siguiente;
+      if (!siguienteId) {
+        log.warn(`No se pudo calcular el siguiente IdLista para ${bucket} (no autonumérico)`);
+        fallos.push(`${bucket}: no se pudo calcular un IdLista libre`);
+        continue;
+      }
+      columnas.push('IdLista');
+      valores.push('@idlista');
+      params.push({ nombre: 'idlista', tipo: sql.Int, valor: siguienteId });
+    }
     const resultado = await insertarConReintentoPorColumna(
-      p, 'ListaArticu', colsInfo, columnasInsert, valoresInsert,
-      [{ nombre: 'nombre', tipo: sql.VarChar, valor: `NextFarma - ${bucket}` }], { outputCol: 'IdLista' }
+      p, 'ListaArticu', colsInfo, columnas, valores, params, { outputCol: 'IdLista' }
     );
     if (resultado.ok && resultado.id) {
       creadas.push({ categoria: bucket, lista_id: resultado.id });
