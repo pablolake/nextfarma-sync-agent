@@ -365,14 +365,32 @@ async function fetchProductos() {
   // unirla, para no romper la lectura de TODO el catálogo si una instalación no la tiene.
   // Da el nombre REAL del laboratorio para esa instalación concreta, en vez de depender solo
   // del mapa fijo (LAB_MAP en el backend) que nunca puede cubrir todos los códigos posibles.
+  // IdProveedor/Nombre NO son universales — caso real Jose-2: su Proveedor tiene IDPROVEEDOR
+  // (mayúsculas, coincide igual por case-insensitive) pero el nombre está en PER_NOMBRE/
+  // FIS_NOMBRE, no en "Nombre" — un nombre de columna fijo rompió TODA la subida de catálogo
+  // (la consulta entera fallaba con "Invalid column name"), no solo el nombre del laboratorio.
   const tablaProveedorR = await p.request().query(`SELECT name FROM sys.tables WHERE name = 'Proveedor'`)
     .catch(() => ({ recordset: [] }));
-  const joinProveedor = tablaProveedorR.recordset.length
-    ? `LEFT JOIN Proveedor prov ON LTRIM(RTRIM(a.Laboratorio)) = LTRIM(RTRIM(prov.IdProveedor))`
-    : '';
-  const selProveedor = tablaProveedorR.recordset.length
-    ? `LTRIM(RTRIM(prov.Nombre)) AS laboratorio_nombre,`
-    : `NULL AS laboratorio_nombre,`;
+  let joinProveedor = '';
+  let selProveedor  = `NULL AS laboratorio_nombre,`;
+  if (tablaProveedorR.recordset.length) {
+    const colsProvR = await p.request().query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Proveedor'`
+    ).catch(() => ({ recordset: [] }));
+    const colsProv = new Set(colsProvR.recordset.map(r => String(r.COLUMN_NAME)));
+    const colProvId = await resolverAtributoColumna({
+      entidad: 'PROVEEDOR', atributo: 'id', candidatos: ['IdProveedor', 'IDPROVEEDOR'],
+      columnasReales: colsProv, descripcion: 'Columna de Proveedor con el código de proveedor/laboratorio (el mismo que Articu.Laboratorio).',
+    });
+    const colProvNombre = await resolverAtributoColumna({
+      entidad: 'PROVEEDOR', atributo: 'nombre', candidatos: ['Nombre', 'PER_NOMBRE', 'FIS_NOMBRE'],
+      columnasReales: colsProv, descripcion: 'Columna de Proveedor con el nombre visible del laboratorio/proveedor.',
+    });
+    if (colProvId && colProvNombre) {
+      joinProveedor = `LEFT JOIN Proveedor prov ON LTRIM(RTRIM(a.Laboratorio)) = LTRIM(RTRIM(prov.${colProvId}))`;
+      selProveedor  = `LTRIM(RTRIM(prov.${colProvNombre})) AS laboratorio_nombre,`;
+    }
+  }
 
   const cdb = CONSEJO_DB();
   const result = await p.request().query(`
