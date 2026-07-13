@@ -360,6 +360,20 @@ async function fetchProductos() {
 
   log.info(`Columnas Articu: pvl=PVP×${PVL_FACTOR} (calculado) puc=${colPuc||'—'} iva=${colIva||'—'}`);
 
+  // Proveedor no está en TABLAS_ESPERADAS (no se garantiza que exista en toda instalación,
+  // aunque fetchRecepcionesRecientes ya la usa sin comprobar) — aquí sí se comprueba antes de
+  // unirla, para no romper la lectura de TODO el catálogo si una instalación no la tiene.
+  // Da el nombre REAL del laboratorio para esa instalación concreta, en vez de depender solo
+  // del mapa fijo (LAB_MAP en el backend) que nunca puede cubrir todos los códigos posibles.
+  const tablaProveedorR = await p.request().query(`SELECT name FROM sys.tables WHERE name = 'Proveedor'`)
+    .catch(() => ({ recordset: [] }));
+  const joinProveedor = tablaProveedorR.recordset.length
+    ? `LEFT JOIN Proveedor prov ON LTRIM(RTRIM(a.Laboratorio)) = LTRIM(RTRIM(prov.IdProveedor))`
+    : '';
+  const selProveedor = tablaProveedorR.recordset.length
+    ? `LTRIM(RTRIM(prov.Nombre)) AS laboratorio_nombre,`
+    : `NULL AS laboratorio_nombre,`;
+
   const cdb = CONSEJO_DB();
   const result = await p.request().query(`
     SELECT
@@ -383,6 +397,7 @@ async function fetchProductos() {
       bpj.NOMBRE                        AS gh,
       bpj.PVPMENOR                      AS pvp_menor,
       bpj.TIPO                          AS tipo_conjunto,
+      ${selProveedor}
       (
         SELECT COUNT(*)
         FROM ${cdb}.dbo.BP_CONJARTI bpc2
@@ -393,6 +408,7 @@ async function fetchProductos() {
       ON LTRIM(RTRIM(a.IdArticu)) = LTRIM(RTRIM(bpc.CODIGO)) AND bpc.CODCCAA = 0
     LEFT JOIN ${cdb}.dbo.BP_CONJUNTOS bpj
       ON bpc.CODConjunto = bpj.CODCONJUNTO AND bpj.CODCCAA = 0
+    ${joinProveedor}
     WHERE a.Baja = 0
   `);
 
@@ -459,6 +475,7 @@ async function fetchProductos() {
       codigo_nacional:  cn,
       nombre,
       laboratorio:      r.laboratorio ? String(r.laboratorio).trim() : null,
+      laboratorio_nombre: r.laboratorio_nombre ? String(r.laboratorio_nombre).trim() : null,
       principio_activo: null,
       grupo_homogeneo:  r.gh      || null,
       codigo_gh:        r.ch      || null,
