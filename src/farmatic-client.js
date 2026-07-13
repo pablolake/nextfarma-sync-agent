@@ -447,6 +447,11 @@ async function fetchProductos() {
     else                                           universo = 'PARAFARMACIA';
 
     const tipo             = tieneGH ? (r.efg ? 'GENÉRICO' : 'ÉTICO') : null;
+    // tipo_origen: de dónde vino esta clasificación — 'farmatic_efg' aquí (GeneArti.EFG); si
+    // 4DB tiene este CN, sync.js la pisa con 'GENÉRICO'/'ÉTICO' propio y marca origen '4db'.
+    // Sirve para poder buscar desde el panel "¿por qué este CN sale como ético?" sin tener
+    // que adivinar cuál de las dos fuentes decidió — caso real: éticos que no lo son en Jose-2.
+    const tipoOrigen       = tipo ? 'farmatic_efg' : null;
     const labNombreCorto   = (r.laboratorio || '').trim().toUpperCase();
     const es_secundario    = LABS_SECUNDARIOS.has(labNombreCorto);
 
@@ -463,10 +468,12 @@ async function fetchProductos() {
       puc:              r.puc != null && Number(r.puc) > 0 ? +Number(r.puc).toFixed(4) : null,
       iva:              r.iva != null ? String(r.iva).trim() : null,
       dto:              dto > 0 ? dto : null,
+      dto_origen:       dto > 0 ? 'excel' : null,
       sc:               null,
       pc,
       universo,
       tipo,
+      tipo_origen:      tipoOrigen,
       es_generico:      r.efg === 1 || r.efg === true,
       es_secundario,
     };

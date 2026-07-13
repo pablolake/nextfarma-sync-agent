@@ -372,8 +372,9 @@ async function runSync(opts = {}) {
       for (const prod of productos) {
         const d = map4DB.get(prod.codigo_nacional);
         if (d) {
-          prod.tipo       = d.es_generico ? 'GENÉRICO' : 'ÉTICO';
-          prod.dto        = d.dto_pct > 0 ? d.dto_pct : (prod.dto || 0);
+          prod.tipo        = d.es_generico ? 'GENÉRICO' : 'ÉTICO';
+          prod.tipo_origen = '4db';
+          if (d.dto_pct > 0) { prod.dto = d.dto_pct; prod.dto_origen = '4db'; }
           prod.pvl        = d.pvl_4db || prod.pvl;
           prod.modelo_4db = d.modelo;
           if (d.dto_pct > 0) n4db++;
@@ -394,6 +395,7 @@ async function runSync(opts = {}) {
       const r = mapRecep.get(prod.codigo_nacional);
       if (!r || r.bonificacion == null || r.bonificacion <= 0) continue;
       prod.dto = +(r.bonificacion / 100).toFixed(4);
+      prod.dto_origen = 'linea_recep';
       nRecep++;
     }
     if (nRecep > 0) log.info(`✓ LineaRecep fallback: ${nRecep} productos con dto de albarán`);
