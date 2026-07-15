@@ -372,8 +372,12 @@ async function runSync(opts = {}) {
       for (const prod of productos) {
         const d = map4DB.get(prod.codigo_nacional);
         if (d) {
-          prod.tipo        = d.es_generico ? 'GENÉRICO' : 'ÉTICO';
-          prod.tipo_origen = '4db';
+          // tipo NUNCA se toca aquí — 4DB es para precio/descuento, no para saber si un
+          // producto es genérico. d.es_generico solo refleja si tiene una promoción activa
+          // en 3 canales concretos (COFARES DIRECTO/NEXO/PROMOCIONES); un genérico real sin
+          // promoción vigente por esos canales se quedaba pisado a ÉTICO, contradiciendo el
+          // EFG de Farmatic (caso real: 1.297 productos "EFG" marcados ÉTICO en Jose-2). El
+          // tipo correcto es siempre el que ya puso fetchProductos() desde GeneArti.EFG.
           if (d.dto_pct > 0) { prod.dto = d.dto_pct; prod.dto_origen = '4db'; }
           prod.pvl        = d.pvl_4db || prod.pvl;
           prod.modelo_4db = d.modelo;
