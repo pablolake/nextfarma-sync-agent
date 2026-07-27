@@ -1,6 +1,7 @@
 'use strict';
 
 const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, shell } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path  = require('path');
 const Store = require('electron-store');
 
@@ -17,6 +18,7 @@ let syncEnabled        = false;
 let localServerStarted = false;
 let lastSyncResults    = null;
 let logListenerAttached = false;
+let pendingUpdate      = false;
 
 // ── Single instance lock ─────────────────────────────────────────────────────
 const gotLock = app.requestSingleInstanceLock();
@@ -365,6 +367,37 @@ ipcMain.handle('wizard-save', async (_, wizardCfg) => {
   return { ok: true };
 });
 
+// ── Auto-updater ──────────────────────────────────────────────────────────────
+function setupAutoUpdater() {
+  if (!app.isPackaged) return;
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('update-available', (info) => {
+    try { require('../src/logger').info(`Nueva versión disponible: v${info.version}`); } catch {}
+    send('update-available', { version: info.version });
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    try { require('../src/logger').info(`Actualización v${info.version} descargada — se instalará al reiniciar`); } catch {}
+    pendingUpdate = true;
+    send('update-downloaded', { version: info.version });
+    refreshTray();
+  });
+
+  autoUpdater.on('error', (err) => {
+    try { require('../src/logger').warn('auto-updater:', err.message); } catch {}
+  });
+
+  setTimeout(() => autoUpdater.checkForUpdates().catch(() => {}), 8000);
+}
+
+ipcMain.handle('install-update', () => {
+  if (pendingUpdate) autoUpdater.quitAndInstall();
+  return { ok: pendingUpdate };
+});
+
 // ── Window ────────────────────────────────────────────────────────────────────
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -413,6 +446,14 @@ function buildTrayMenu() {
       click:   () => require('../src/api-client').requestAbort(),
     },
     { type: 'separator' },
+    {
+      label: pendingUpdate ? '⟳ Instalar actualización y reiniciar' : 'Buscar actualizaciones',
+      click: () => {
+        if (pendingUpdate) { autoUpdater.quitAndInstall(); return; }
+        if (app.isPackaged) autoUpdater.checkForUpdates().catch(() => {});
+      },
+    },
+    { type: 'separator' },
     { label: 'Salir', click: () => { app.quit(); } },
   ]);
 }
@@ -454,6 +495,7 @@ app.whenReady().then(() => {
 
   createWindow();
   createTray();
+  setupAutoUpdater();
 
   mainWindow.webContents.once('did-finish-load', () => {
     if (!cfg.apiKey) send('show-setup', {});

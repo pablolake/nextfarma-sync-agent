@@ -16,6 +16,7 @@
     "better-sqlite3": "^12.11.1",
     "dotenv": "^16.4.5",
     "electron-store": "^7.0.3",
+    "electron-updater": "^6.3.0",
     "express": "^4.19.2",
     "mssql": "^11.0.1",
     "xlsx": "^0.18.5"
@@ -69,6 +70,11 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "NextFarma Sync"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "pablolake",
+      "repo": "nextfarma-sync-agent"
     },
     "extraResources": [],
     "nodeGypRebuild": false,

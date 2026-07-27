@@ -702,3 +702,22 @@ header {
   100% { opacity: 1; }
 }
 .step-item.step-running .step-icon { animation: pulse-spin 1.2s ease-in-out infinite; }
+
+/* ── Update banner ──────────────────────────────────────────────────── */
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 18px;
+  background: #1c3a1c;
+  border-bottom: 1px solid #2a5a2a;
+  color: #86efac;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.update-banner.downloading {
+  background: #1c2a3a;
+  border-color: #2a4a6a;
+  color: #93c5fd;
+}

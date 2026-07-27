@@ -29,6 +29,8 @@ window.addEventListener('DOMContentLoaded', async () => {
   window.sync.onSyncEnabled(onSyncEnabled);
   window.sync.onShowSetup(() => switchTab('config'));
   window.sync.onSyncStep(onSyncStep);
+  window.sync.onUpdateAvailable(onUpdateAvailable);
+  window.sync.onUpdateDownloaded(onUpdateDownloaded);
 });
 
 /* ── Config ─────────────────────────────────────────────────────────── */
@@ -921,6 +923,29 @@ async function wizardFinish() {
   // Restart sync with new settings
   await window.sync.stopSync();
   await window.sync.startSync();
+}
+
+/* ── Auto-update ─────────────────────────────────────────────────────── */
+function onUpdateAvailable({ version }) {
+  const banner = document.getElementById('update-banner');
+  const msg    = document.getElementById('update-msg');
+  msg.textContent = `Descargando actualización v${version}…`;
+  banner.className = 'update-banner downloading';
+  banner.style.display = '';
+}
+
+function onUpdateDownloaded({ version }) {
+  const banner  = document.getElementById('update-banner');
+  const msg     = document.getElementById('update-msg');
+  const btn     = document.getElementById('btn-update-install');
+  msg.textContent = `Actualización v${version} lista para instalar`;
+  banner.className = 'update-banner';
+  banner.style.display = '';
+  btn.style.display = '';
+}
+
+async function installUpdate() {
+  await window.sync.installUpdate();
 }
 
 // ── Refresh "last sync" label every 30s
