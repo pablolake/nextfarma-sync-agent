@@ -790,30 +790,28 @@ async function fetch4DBDescuentos() {
       SELECT
         LTRIM(RTRIM(CAST(cat.codigoNacional AS VARCHAR))) AS cn,
         cat.pvl,
-        COALESCE(best.discount, 0) AS dto_pct,
-        best.nombre                AS modelo
+        cd.discount AS dto_cofares
       FROM _4DB_CAT_CatalogoArt cat
       LEFT JOIN (
-        SELECT codigonacional, MAX(discount) AS discount, MAX(nombre) AS nombre
+        SELECT codigonacional, MAX(discount) AS discount
         FROM _4DB_CAT_Models
         WHERE catalogo = @catalogo
-          AND nombre IN ('COFARES DIRECTO', 'NEXO', 'PROMOCIONES')
+          AND nombre = 'COFARES DIRECTO'
         GROUP BY codigonacional
-      ) best ON best.codigonacional = cat.codigoNacional
+      ) cd ON cd.codigonacional = cat.codigoNacional
       WHERE cat.catalogo = @catalogo AND cat.iva = 'S'
     `);
 
   return result.recordset.map(r => ({
     codigo_nacional: String(r.cn).trim(),
     pvl_4db:         r.pvl != null ? +Number(r.pvl).toFixed(4) : null,
+    cofares_directo: r.dto_cofares != null,
     dto_pct:         (() => {
-      const v = r.dto_pct != null ? +Number(r.dto_pct) : 0;
+      const v = r.dto_cofares != null ? +Number(r.dto_cofares) : 0;
       if (v <= 0) return 0;
       // 4DB can store as % (5) or decimal (0.05) — normalize to decimal
       return v > 1 ? +(v / 100).toFixed(4) : +v.toFixed(4);
     })(),
-    modelo:          r.modelo || null,
-    es_generico:     r.modelo != null,
   })).filter(r => /^\d{5,}$/.test(r.codigo_nacional));
 }
 
