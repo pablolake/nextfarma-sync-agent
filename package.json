@@ -74,7 +74,8 @@
     "publish": {
       "provider": "github",
       "owner": "pablolake",
-      "repo": "nextfarma-sync-agent"
+      "repo": "nextfarma-sync-agent",
+      "releaseType": "release"
     },
     "extraResources": [],
     "nodeGypRebuild": false,
