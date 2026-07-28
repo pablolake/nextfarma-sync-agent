@@ -19,6 +19,7 @@ let localServerStarted = false;
 let lastSyncResults    = null;
 let logListenerAttached = false;
 let pendingUpdate      = false;
+let isQuittingForUpdate = false;
 
 // ── Single instance lock ─────────────────────────────────────────────────────
 const gotLock = app.requestSingleInstanceLock();
@@ -394,8 +395,10 @@ function setupAutoUpdater() {
 }
 
 ipcMain.handle('install-update', () => {
-  if (pendingUpdate) autoUpdater.quitAndInstall();
-  return { ok: pendingUpdate };
+  if (!pendingUpdate) return { ok: false };
+  isQuittingForUpdate = true;
+  autoUpdater.quitAndInstall(false, true);
+  return { ok: true };
 });
 
 // ── Window ────────────────────────────────────────────────────────────────────
@@ -420,7 +423,7 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => mainWindow.show());
 
-  mainWindow.on('close', (e) => { e.preventDefault(); mainWindow.hide(); });
+  mainWindow.on('close', (e) => { if (!isQuittingForUpdate) { e.preventDefault(); mainWindow.hide(); } });
 }
 
 // ── Tray ──────────────────────────────────────────────────────────────────────
@@ -504,6 +507,7 @@ app.whenReady().then(() => {
 
 // ── Quit ──────────────────────────────────────────────────────────────────────
 app.on('before-quit', async () => {
+  if (pendingUpdate) isQuittingForUpdate = true;
   stopAutoSync();
   try {
     const farmatic = require('../src/farmatic-client');
