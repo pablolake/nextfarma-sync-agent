@@ -393,6 +393,46 @@ async function fetchProductos() {
   }
 
   const cdb = CONSEJO_DB();
+
+  // Pre-query: qué GH son genéricos según ESPEPARA (Consejo oficial).
+  // Regla 1: algún miembro del GH tiene ESPEPARA.EFG = 'EFG'.
+  // Regla 2: ninguno tiene EFG pero algún lab del GH supera 200 GH distintos → GH completo genérico.
+  // Si ESPEPARA no existe en esta instalación se usa GeneArti.EFG como fallback.
+  let ghGenericoSet = null;
+  try {
+    const ghRes = await p.request().query(`
+      WITH labs_genericos AS (
+        SELECT e.LABORATORIO
+        FROM ${cdb}.dbo.BP_CONJARTI bc
+        INNER JOIN ${cdb}.dbo.ESPEPARA e ON e.CODIGO = bc.CODIGO
+        WHERE bc.CODCCAA = 0
+        GROUP BY e.LABORATORIO
+        HAVING COUNT(DISTINCT bc.CODConjunto) > 200
+      ),
+      gh_con_efg AS (
+        SELECT DISTINCT bc.CODConjunto
+        FROM ${cdb}.dbo.BP_CONJARTI bc
+        INNER JOIN ${cdb}.dbo.ESPEPARA e ON e.CODIGO = bc.CODIGO
+        WHERE bc.CODCCAA = 0 AND e.EFG = 'EFG'
+      ),
+      gh_lab_generico AS (
+        SELECT DISTINCT bc.CODConjunto
+        FROM ${cdb}.dbo.BP_CONJARTI bc
+        INNER JOIN ${cdb}.dbo.ESPEPARA e ON e.CODIGO = bc.CODIGO
+        INNER JOIN labs_genericos lg ON lg.LABORATORIO = e.LABORATORIO
+        WHERE bc.CODCCAA = 0
+          AND bc.CODConjunto NOT IN (SELECT CODConjunto FROM gh_con_efg)
+      )
+      SELECT CODConjunto FROM gh_con_efg
+      UNION
+      SELECT CODConjunto FROM gh_lab_generico
+    `);
+    ghGenericoSet = new Set(ghRes.recordset.map(r => String(r.CODConjunto)));
+    log.info(`Clasificación EFG: ${ghGenericoSet.size} GH genéricos (ESPEPARA)`);
+  } catch (e) {
+    log.warn(`ESPEPARA no disponible, usando GeneArti.EFG como fallback: ${e.message}`);
+  }
+
   const result = await p.request().query(`
     SELECT
       LTRIM(RTRIM(a.IdArticu))          AS cn,
@@ -480,12 +520,13 @@ async function fetchProductos() {
     else if (!r.receta && r.excluido_ss && !r.efp) universo = 'PARAFARMACIA';
     else                                           universo = 'PARAFARMACIA';
 
-    const tipo             = tieneGH ? (r.efg ? 'GENÉRICO' : 'ÉTICO') : null;
-    // tipo_origen: de dónde vino esta clasificación — 'farmatic_efg' aquí (GeneArti.EFG); si
-    // 4DB tiene este CN, sync.js la pisa con 'GENÉRICO'/'ÉTICO' propio y marca origen '4db'.
-    // Sirve para poder buscar desde el panel "¿por qué este CN sale como ético?" sin tener
-    // que adivinar cuál de las dos fuentes decidió — caso real: éticos que no lo son en Jose-2.
-    const tipoOrigen       = tipo ? 'farmatic_efg' : null;
+    // ghGenericoSet disponible → clasificación por ESPEPARA+labs (regla oficial Consejo).
+    // Sin ghGenericoSet → fallback a GeneArti.EFG (entero 0/1) de Farmatic.
+    const esGenerico = ghGenericoSet !== null
+      ? (tieneGH && ghGenericoSet.has(String(r.ch)))
+      : (r.efg === 1 || r.efg === true);
+    const tipo       = tieneGH ? (esGenerico ? 'GENÉRICO' : 'ÉTICO') : null;
+    const tipoOrigen = tipo ? (ghGenericoSet !== null ? 'consejo_espepara' : 'farmatic_efg') : null;
     const labNombreCorto   = (r.laboratorio || '').trim().toUpperCase();
     const es_secundario    = LABS_SECUNDARIOS.has(labNombreCorto);
 
@@ -509,7 +550,7 @@ async function fetchProductos() {
       universo,
       tipo,
       tipo_origen:      tipoOrigen,
-      es_generico:      r.efg === 1 || r.efg === true,
+      es_generico:      esGenerico,
       es_secundario,
     };
   }).filter(Boolean);
