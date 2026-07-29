@@ -203,13 +203,29 @@ async function discoverSchema() {
       log.warn('Barrido completo de tablas falló:', err.message);
     }
 
-    schemaCache = { tablas, tablas_esperadas_faltantes: faltantes, tablas_completo: tablasCompleto };
+    let tablasConsejoCompleto = {};
+    try {
+      const todasConsejoR = await p.request().query(`SELECT name FROM ${cdb}.sys.tables`);
+      const nombresConsejo = todasConsejoR.recordset.map(r => r.name);
+      if (nombresConsejo.length) {
+        const colsConsejoTodasR = await p.request().query(`
+          SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE FROM ${cdb}.INFORMATION_SCHEMA.COLUMNS
+          WHERE TABLE_NAME IN (${nombresConsejo.map(t => `'${t}'`).join(',')})
+        `);
+        for (const t of nombresConsejo) tablasConsejoCompleto[t] = [];
+        for (const row of colsConsejoTodasR.recordset) tablasConsejoCompleto[row.TABLE_NAME].push({ nombre: row.COLUMN_NAME, tipo: row.DATA_TYPE });
+      }
+    } catch (err) {
+      log.warn('Barrido completo de tablas Consejo falló:', err.message);
+    }
+
+    schemaCache = { tablas, tablas_esperadas_faltantes: faltantes, tablas_completo: tablasCompleto, tablas_consejo_completo: tablasConsejoCompleto };
     if (faltantes.length > 0) {
       log.warn(`Esquema Farmatic: no se encontraron estas tablas esperadas: ${faltantes.join(', ')}`);
     }
   } catch (err) {
     log.warn('discoverSchema falló:', err.message);
-    schemaCache = { tablas: {}, tablas_esperadas_faltantes: TABLAS_ESPERADAS, tablas_completo: {}, error: err.message };
+    schemaCache = { tablas: {}, tablas_esperadas_faltantes: TABLAS_ESPERADAS, tablas_completo: {}, tablas_consejo_completo: {}, error: err.message };
   }
   return schemaCache;
 }
