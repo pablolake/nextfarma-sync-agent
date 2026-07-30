@@ -410,38 +410,22 @@ async function fetchProductos() {
 
   const cdb = CONSEJO_DB();
 
-  // Pre-query: qué GH son genéricos según ESPEPARA (Consejo oficial).
-  // Regla 1: algún miembro del GH tiene ESPEPARA.EFG = 'EFG'.
-  // Regla 2: ninguno tiene EFG pero algún lab del GH supera 200 GH distintos → GH completo genérico.
+  // Pre-query: qué GH son genéricos según ESPEPARA (Consejo oficial) — únicamente por el
+  // flag directo: algún miembro del GH tiene ESPEPARA.EFG = 'EFG'.
+  // Antes había una "Regla 2": si ningún miembro tenía EFG pero el laboratorio superaba
+  // 200 conjuntos distintos en todo el catálogo del Consejo, se marcaba el GH ENTERO como
+  // genérico por venir de un fabricante "mayormente genérico". Se quita — laboratorios
+  // grandes (Kern, Normon, Cinfa, Teva, Stada...) superan ese umbral con facilidad, así
+  // que esta regla acababa marcando como genérico casi cualquier producto de esos labs,
+  // incluida alguna marca/ético propia suya (caso real: "todo sale como genérico").
   // Si ESPEPARA no existe en esta instalación se usa GeneArti.EFG como fallback.
   let ghGenericoSet = null;
   try {
     const ghRes = await p.request().query(`
-      WITH labs_genericos AS (
-        SELECT e.LABORATORIO
-        FROM ${cdb}.dbo.BP_CONJARTI bc
-        INNER JOIN ${cdb}.dbo.ESPEPARA e ON e.CODIGO = bc.CODIGO
-        WHERE bc.CODCCAA = 0
-        GROUP BY e.LABORATORIO
-        HAVING COUNT(DISTINCT bc.CODConjunto) > 200
-      ),
-      gh_con_efg AS (
-        SELECT DISTINCT bc.CODConjunto
-        FROM ${cdb}.dbo.BP_CONJARTI bc
-        INNER JOIN ${cdb}.dbo.ESPEPARA e ON e.CODIGO = bc.CODIGO
-        WHERE bc.CODCCAA = 0 AND e.EFG = 'EFG'
-      ),
-      gh_lab_generico AS (
-        SELECT DISTINCT bc.CODConjunto
-        FROM ${cdb}.dbo.BP_CONJARTI bc
-        INNER JOIN ${cdb}.dbo.ESPEPARA e ON e.CODIGO = bc.CODIGO
-        INNER JOIN labs_genericos lg ON lg.LABORATORIO = e.LABORATORIO
-        WHERE bc.CODCCAA = 0
-          AND bc.CODConjunto NOT IN (SELECT CODConjunto FROM gh_con_efg)
-      )
-      SELECT CODConjunto FROM gh_con_efg
-      UNION
-      SELECT CODConjunto FROM gh_lab_generico
+      SELECT DISTINCT bc.CODConjunto
+      FROM ${cdb}.dbo.BP_CONJARTI bc
+      INNER JOIN ${cdb}.dbo.ESPEPARA e ON e.CODIGO = bc.CODIGO
+      WHERE bc.CODCCAA = 0 AND e.EFG = 'EFG'
     `);
     ghGenericoSet = new Set(ghRes.recordset.map(r => String(r.CODConjunto)));
     log.info(`Clasificación EFG: ${ghGenericoSet.size} GH genéricos (ESPEPARA)`);
