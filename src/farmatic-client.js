@@ -410,60 +410,31 @@ async function fetchProductos() {
 
   const cdb = CONSEJO_DB();
 
-  // Clasificación EFG (criterio acordado con Jose Malaga, 29/7/2026):
+  // Clasificación EFG — SOLO el flag oficial, sin reglas de respaldo (decidido 31/7/2026,
+  // tras confirmar dos veces con datos reales que cualquier regla de respaldo por
+  // laboratorio sobre-clasifica):
   //   1. Si ESE producto concreto tiene ESPEPARA.EFG = 'EFG' → GENÉRICO. Por CN, no por
-  //      grupo — antes, si CUALQUIER miembro del GH tenía EFG, se marcaba el GH entero,
-  //      lo que arrastraba marcas originales (AIRTAL, ZOVIRAX, FOSAVANCE — caso real
-  //      confirmado en farmacia jose) a GENÉRICO solo por compartir grupo con sus
-  //      genéricos reales.
-  //   2. Si no, pero NINGÚN miembro del grupo homogéneo tiene EFG='EFG' Y el grupo
-  //      incluye algún laboratorio "genérico conocido" (>200 conjuntos distintos en
-  //      todo el catálogo del Consejo) → todo el grupo se trata como genérico (sin
-  //      referencia EFG identificable, pero de fabricante mayormente genérico).
-  //   3. Cualquier otro caso → ÉTICO (marcas en exclusividad, co-marketing, casos raros
-  //      — no se diferencian, caen todos aquí por descarte).
-  // El paso 1 se resuelve por producto en el JOIN principal (columna efg_consejo, más
-  // abajo); esta pre-query solo calcula el conjunto de "grupos sin ningún EFG oficial
-  // pero de laboratorio genérico" que necesita el paso 2.
+  //      grupo — si CUALQUIER miembro del GH tuviera EFG y se marcara el GH entero,
+  //      arrastraría marcas originales (AIRTAL, ZOVIRAX, FOSAVANCE — caso real confirmado
+  //      en farmacia jose) a GENÉRICO solo por compartir grupo con sus genéricos reales.
+  //   2. Cualquier otro caso (sin EFG='EFG' en ESPEPARA para ese CN, o sin fila en
+  //      absoluto) → ÉTICO. Hubo una "Regla 2" que trataba como genérico un producto sin
+  //      EFG propio si su laboratorio superaba 200 conjuntos distintos en el catálogo del
+  //      Consejo (Kern, Normon, Cinfa, Teva, Stada...) — se quitó definitivamente: esos
+  //      laboratorios grandes también venden marcas/éticos propios, y la regla los
+  //      clasificaba como genérico igual, sin mirar el producto en sí.
   // Si ESPEPARA no existe en esta instalación se usa GeneArti.EFG como fallback (por
   // instalación, no por producto — no hay forma de saber esto por CN sin ESPEPARA).
-  let ghFallbackGenericoSet = null;
   let espeparaDisponible = false;
   try {
-    const ghRes = await p.request().query(`
-      WITH labs_genericos AS (
-        SELECT e.LABORATORIO
-        FROM ${cdb}.dbo.BP_CONJARTI bc
-        INNER JOIN ${cdb}.dbo.ESPEPARA e ON e.CODIGO = bc.CODIGO
-        WHERE bc.CODCCAA = 0
-        GROUP BY e.LABORATORIO
-        HAVING COUNT(DISTINCT bc.CODConjunto) > 200
-      ),
-      gh_sin_ningun_efg AS (
-        SELECT bc.CODConjunto
-        FROM ${cdb}.dbo.BP_CONJARTI bc
-        INNER JOIN ${cdb}.dbo.ESPEPARA e ON e.CODIGO = bc.CODIGO
-        WHERE bc.CODCCAA = 0
-        GROUP BY bc.CODConjunto
-        HAVING SUM(CASE WHEN e.EFG = 'EFG' THEN 1 ELSE 0 END) = 0
-      )
-      SELECT DISTINCT bc.CODConjunto
-      FROM ${cdb}.dbo.BP_CONJARTI bc
-      INNER JOIN ${cdb}.dbo.ESPEPARA e ON e.CODIGO = bc.CODIGO
-      INNER JOIN labs_genericos lg ON lg.LABORATORIO = e.LABORATORIO
-      WHERE bc.CODCCAA = 0
-        AND bc.CODConjunto IN (SELECT CODConjunto FROM gh_sin_ningun_efg)
-    `);
-    ghFallbackGenericoSet = new Set(ghRes.recordset.map(r => String(r.CODConjunto)));
+    await p.request().query(`SELECT TOP 1 1 FROM ${cdb}.dbo.ESPEPARA`);
     espeparaDisponible = true;
-    log.info(`Clasificación EFG: ${ghFallbackGenericoSet.size} GH sin EFG oficial pero de lab genérico (fallback regla 2)`);
   } catch (e) {
     log.warn(`ESPEPARA no disponible, usando GeneArti.EFG como fallback: ${e.message}`);
   }
 
-  // Para el paso 1 (EFG por producto) hace falta el flag de ESE CN en concreto — se une
-  // aquí por el mismo CODIGO que ya usa el JOIN principal a BP_CONJARTI (bpc.CODIGO =
-  // a.IdArticu), no en la pre-query de arriba (que es solo para el fallback de grupo).
+  // EFG por producto: se une por el mismo CODIGO que ya usa el JOIN principal a
+  // BP_CONJARTI (bpc.CODIGO = a.IdArticu), directo por CN.
   const joinEspepara = espeparaDisponible
     ? `LEFT JOIN ${cdb}.dbo.ESPEPARA espe ON espe.CODIGO = bpc.CODIGO`
     : '';
@@ -558,15 +529,11 @@ async function fetchProductos() {
     else if (!r.receta && r.excluido_ss && !r.efp) universo = 'PARAFARMACIA';
     else                                           universo = 'PARAFARMACIA';
 
-    // Paso 1: EFG oficial de ESTE producto (por CN, no por grupo) — si ESPEPARA no tiene
-    // fila para este CN en concreto (raro: normalmente cae del mismo JOIN que ya dio el
-    // grupo), se recurre al fallback de grupo (paso 2, precalculado en
-    // ghFallbackGenericoSet). Paso 3 (ninguna de las dos) → ÉTICO.
+    // EFG oficial de ESTE producto (por CN, no por grupo) — sin fallback de grupo/lab: si
+    // ESPEPARA no tiene EFG='EFG' para este CN en concreto, es ÉTICO.
     const efgConsejo = r.efg_consejo != null ? String(r.efg_consejo).trim() : null;
     const esGenerico = espeparaDisponible
-      ? (efgConsejo !== null
-          ? efgConsejo === 'EFG'
-          : (tieneGH && ghFallbackGenericoSet.has(String(r.ch))))
+      ? efgConsejo === 'EFG'
       : (r.efg === 1 || r.efg === true);
     const tipo       = tieneGH ? (esGenerico ? 'GENÉRICO' : 'ÉTICO') : null;
     const tipoOrigen = tipo ? (espeparaDisponible ? 'consejo_espepara' : 'farmatic_efg') : null;
