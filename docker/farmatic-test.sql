@@ -188,13 +188,18 @@ GO
 -- Artículos con CNs de 7 dígitos (formato estándar español)
 -- Stock (Módulo Receta, Fase 4) — dos patrones reales del documento de diseño: crónico de
 -- alta rotación (stock holgado tipo 20/13/20) y puntual controlado (stock ajustado 14/1/1).
--- 1000004 (OMEPRAZOL) se deja con StockActual < StockMinimo a propósito — prueba la señal
+-- 1000003 (AMOXICILINA) se deja con StockActual < StockMinimo a propósito — prueba la señal
 -- "stock bajo" (rojo) tanto en la tabla de CNs del GH como en GET /api/:tenantId/stock.
+-- OJO: 1000001/1000002/1000004/1000008 tienen Pvp por encima de su PVPMENOR de BP_CONJUNTOS
+-- (más de 1%) — fetchProductos() los descarta como "pvpSuperior" (dato inconsistente, ver
+-- farmatic-client.js), así que NUNCA llegan a Railway. Preexistente a Receta, no se toca
+-- aquí (afecta a datos de prueba de otras features) — por eso el caso de stock bajo se
+-- monta sobre 1000003, que sí sobrevive ese filtro (Pvp = PVPMENOR exacto).
 INSERT INTO Articu (IdArticu, Descripcion, Laboratorio, Pvp, Pvl, Puc, IVA, Efp, Receta, ExcluidoSS, Baja, StockActual, StockMinimo, StockMaximo) VALUES
   ('1000001', N'IBUPROFENO 600MG 40 COMP EFG',     'E0111',  5.58, 3.01, 2.87, '4', 0, 1, 0, 0, 20, 13, 20),
   ('1000002', N'PARACETAMOL 1G 10 COMP EFG',        'E0426',  2.82, 1.52, 1.45, '4', 0, 0, 0, 0, 19, 13, 20),
-  ('1000003', N'AMOXICILINA 500MG 24 CAPS EFG',     'E0863',  3.49, 1.88, 1.78, '4', 0, 1, 0, 0, 14, 13, 20),
-  ('1000004', N'OMEPRAZOL 20MG 28 CAPS EFG',        'E0111',  1.62, 0.87, 0.82, '4', 0, 1, 0, 0,  8, 13, 20),
+  ('1000003', N'AMOXICILINA 500MG 24 CAPS EFG',     'E0863',  3.49, 1.88, 1.78, '4', 0, 1, 0, 0,  8, 13, 20),
+  ('1000004', N'OMEPRAZOL 20MG 28 CAPS EFG',        'E0111',  1.62, 0.87, 0.82, '4', 0, 1, 0, 0, 14, 13, 20),
   ('1000005', N'IBUPROFENO 400MG 40 COMP EFG',      'E1079',  4.70, 2.53, 2.40, '4', 0, 0, 0, 0, 14,  1,  1),
   ('1000006', N'LORAZEPAM 1MG 50 COMP',             'E0426',  2.28, 1.23, 1.15, '4', 0, 1, 0, 0, 17,  2,  2),
   ('1000007', N'METFORMINA 850MG 50 COMP EFG',      'E0863',  2.12, 1.14, 1.05, '4', 0, 1, 0, 0, 14,  2,  2),
