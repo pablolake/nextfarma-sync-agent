@@ -24,6 +24,30 @@ function labNombre(cod) {
   return (getLabMap()[cod?.trim()] || cod || '').toUpperCase().trim();
 }
 
+// Módulo Receta (documento de diseño v4.0, Fase 1), condición 3 del filtro de relevancia: los 3
+// laboratorios con más volumen de venta (uds) de esta farmacia en los últimos 12 meses.
+// Se calcula aquí (contra todasVentas, ya leído de Farmatic para el resto del sync) en vez
+// de mandar todas las ventas a Railway solo para esto — más barato y ya se tiene todo en
+// memoria en este punto del sync.
+function calcularTop3Laboratorios(ventas, productos) {
+  const hoy = new Date();
+  // Primer día del mes de hace 11 meses → junto con el mes en curso, ventana de 12 meses.
+  const cutoff = new Date(hoy.getFullYear(), hoy.getMonth() - 11, 1);
+  const catalogoPorCN = new Map(productos.map(p => [p.codigo_nacional, p]));
+  const udsPorLab = new Map();
+  for (const v of ventas) {
+    if (new Date(v.anio, v.mes - 1, 1) < cutoff) continue;
+    const prod = catalogoPorCN.get(v.codigo_nacional);
+    const lab  = (prod?.laboratorio || '').trim();
+    if (!lab) continue;
+    udsPorLab.set(lab, (udsPorLab.get(lab) || 0) + (v.unidades || 0));
+  }
+  return [...udsPorLab.entries()]
+    .map(([lab_codigo, uds_12m]) => ({ lab_codigo, uds_12m }))
+    .sort((a, b) => b.uds_12m - a.uds_12m)
+    .slice(0, 3);
+}
+
 function calcularSCporLabMes(ventas, productos) {
   const umbral = parseFloat(process.env.SC_UMBRAL)       || 2500;
   const scCN   = parseFloat(process.env.SC_CINFA_NORMON) || 0.05;
@@ -491,6 +515,19 @@ async function runSync(opts = {}) {
     step('env-ven', 'Sin ventas que enviar', 'warn');
   }
 
+  // Módulo Receta (Fase 1) — top 3 laboratorios por volumen, mismo dato en memoria que ya se
+  // usó arriba para SC, no hace falta releer nada de Farmatic.
+  if (todasVentas.length > 0 && productos.length > 0) {
+    try {
+      const top3 = calcularTop3Laboratorios(todasVentas, productos);
+      const r = await api.enviarTopLaboratorios(top3);
+      if (r.ok) log.info(`✓ Top laboratorios: ${top3.map(l => `${l.lab_codigo} (${l.uds_12m}uds)`).join(', ') || '—'}`);
+      else warn('Top laboratorios no se pudo guardar');
+    } catch (e) {
+      warn('Top laboratorios omitido: ' + e.message);
+    }
+  }
+
   try {
     const vAnuales = await farmatic.fetchVentasAnuales(anioAnterior);
     if (vAnuales.length > 0) {
@@ -656,6 +693,24 @@ async function runSync(opts = {}) {
     }
   } catch (e) {
     log.warn('Lista Negra omitida:', e.message);
+  }
+
+  // Módulo Receta (Fase 6) — mín/máx de stock pendientes de escribir en Farmatic.
+  try {
+    const tenantId = process.env.TENANT_ID;
+    if (tenantId) {
+      const { cambios } = await api.getStockPendiente(tenantId);
+      if (cambios && cambios.length > 0) {
+        log.info('Stock: ' + cambios.length + ' cambios a procesar');
+        const r = await farmatic.procesarStockPendientes(cambios);
+        log.info(`Stock procesado: ${r.procesados} OK, ${r.errores} errores`);
+        if (r.ids_procesados && r.ids_procesados.length > 0) {
+          await api.marcarStockProcesado(tenantId, r.ids_procesados);
+        }
+      }
+    }
+  } catch (e) {
+    log.warn('Stock pendiente omitido:', e.message);
   }
 
   try {

@@ -117,6 +117,17 @@ async function enviarFavoritos(favoritos) {
   }
 }
 
+// Módulo Receta (documento de diseño v4.0, Fase 1) — top 3 laboratorios por volumen de venta
+// (últimos 12 meses), nunca más de 3 filas, así que un solo POST sin batching.
+async function enviarTopLaboratorios(laboratorios) {
+  try {
+    return await request('/api/sync/top-laboratorios', { method: 'POST', body: { laboratorios } });
+  } catch (err) {
+    log.error('enviarTopLaboratorios falló:', err.message);
+    return { ok: false, guardados: 0 };
+  }
+}
+
 async function enviarSchemaInfo(schema) {
   try {
     return await request('/api/sync/schema-info', { method: 'POST', body: schema });
@@ -148,6 +159,19 @@ async function marcarCambiosProcesados(tenantId, ids) {
 
 async function getListaNegraPendiente(tenantId) {
   return request(`/api/${tenantId}/lista-negra-pendiente`);
+}
+
+// Módulo Receta (documento de diseño v4.0, Fase 6) — mín/máx de stock que el titular ajustó
+// (o que NextFarma propuso y el titular aceptó) y que aún no se han escrito en Farmatic.
+async function getStockPendiente(tenantId) {
+  return request(`/api/${tenantId}/stock-pendiente`);
+}
+
+async function marcarStockProcesado(tenantId, ids) {
+  return request(`/api/${tenantId}/stock-pendiente/procesar`, {
+    method: 'POST',
+    body: { ids },
+  });
 }
 
 async function marcarListaNegraProcesada(tenantId, ids) {
@@ -297,6 +321,7 @@ module.exports = {
   enviarVentas,
   enviarRecepciones,
   enviarFavoritos,
+  enviarTopLaboratorios,
   getCambiosPendientes,
   marcarCambiosProcesados,
   // getListaNegraPendiente/marcarListaNegraProcesada estaban definidas pero nunca
@@ -304,6 +329,8 @@ module.exports = {
   // fallaba en silencio (atrapado por el try/catch de "Lista Negra omitida").
   getListaNegraPendiente,
   marcarListaNegraProcesada,
+  getStockPendiente,
+  marcarStockProcesado,
   getVendedoresPendientes,
   marcarVendedoresPendientesProcesados,
   enviarSchemaInfo,

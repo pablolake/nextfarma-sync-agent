@@ -374,6 +374,18 @@ async function fetchProductos() {
   const selPmc  = colPmc ? `a.${colPmc} AS pmc,` : `NULL AS pmc,`;
   const selIva  = colIva ? `CAST(a.${colIva} AS VARCHAR(16)) AS iva,` : `NULL AS iva,`;
 
+  // Stock — Módulo Receta (documento de diseño v4.0, Fase 4): StockActual/StockMinimo/
+  // StockMaximo son nombres de campo fijos de Farmatic (a diferencia de Puc/Pmc/Iva, que sí
+  // varían de instalación en instalación) — comprobación de existencia simple, sin pasar por
+  // el resolvedor de IA, igual que se confirmó en el documento de diseño.
+  const tieneStock = { actual: colsArticu.has('StockActual'), min: colsArticu.has('StockMinimo'), max: colsArticu.has('StockMaximo') };
+  const selStock = `${tieneStock.actual ? 'a.StockActual' : 'NULL'} AS stock_actual, ` +
+    `${tieneStock.min ? 'a.StockMinimo' : 'NULL'} AS stock_minimo_farmatic, ` +
+    `${tieneStock.max ? 'a.StockMaximo' : 'NULL'} AS stock_maximo_farmatic,`;
+  if (!tieneStock.actual && !tieneStock.min && !tieneStock.max) {
+    log.warn('StockActual/StockMinimo/StockMaximo no existen en Articu de esta instalación — stock del Módulo Receta no disponible');
+  }
+
   log.info(`Columnas Articu: pvl=PVP×${PVL_FACTOR} (calculado) puc=${colPuc||'—'} iva=${colIva||'—'}`);
 
   // Proveedor no está en TABLAS_ESPERADAS (no se garantiza que exista en toda instalación,
@@ -435,10 +447,19 @@ async function fetchProductos() {
 
   // EFG por producto: se une por el mismo CODIGO que ya usa el JOIN principal a
   // BP_CONJARTI (bpc.CODIGO = a.IdArticu), directo por CN.
+  // FECHABAJA IS NULL en el ON (no en el WHERE): una ficha de ESPEPARA dada de baja no debe
+  // usarse para clasificar, pero el producto de Farmatic sigue existiendo igual — así el
+  // LEFT JOIN simplemente no matchea esa fila (deja NULL) en vez de excluir el producto
+  // entero, que es justo lo que pasaría si el filtro fuera un WHERE.
   const joinEspepara = espeparaDisponible
-    ? `LEFT JOIN ${cdb}.dbo.ESPEPARA espe ON espe.CODIGO = bpc.CODIGO`
+    ? `LEFT JOIN ${cdb}.dbo.ESPEPARA espe ON espe.CODIGO = bpc.CODIGO AND espe.FECHABAJA IS NULL`
     : '';
-  const selEspepara = espeparaDisponible ? `espe.EFG AS efg_consejo,` : `NULL AS efg_consejo,`;
+  // DISPENSACION/TIPO/APORTACION — Módulo Receta (documento de diseño v4.0, Fase 1): mismo join que
+  // ya trae EFG, solo se amplía el SELECT. Solo se traen y envían a Railway aquí; el filtro
+  // DISPENSACION='R' y el resto de la lógica de relevancia viven en Railway (Fase 2), no aquí.
+  const selEspepara = espeparaDisponible
+    ? `espe.EFG AS efg_consejo, espe.DISPENSACION AS dispensacion_consejo, espe.TIPO AS tipo_consejo, espe.APORTACION AS aportacion_consejo,`
+    : `NULL AS efg_consejo, NULL AS dispensacion_consejo, NULL AS tipo_consejo, NULL AS aportacion_consejo,`;
 
   const result = await p.request().query(`
     SELECT
@@ -449,6 +470,7 @@ async function fetchProductos() {
       ${selPuc}
       ${selPmc}
       ${selIva}
+      ${selStock}
       a.Efp                             AS efp,
       a.Receta                          AS receta,
       a.ExcluidoSS                      AS excluido_ss,
@@ -540,6 +562,17 @@ async function fetchProductos() {
     const labNombreCorto   = (r.laboratorio || '').trim().toUpperCase();
     const es_secundario    = LABS_SECUNDARIOS.has(labNombreCorto);
 
+    // Módulo Receta (Fase 1) — campos crudos de ESPEPARA, sin interpretar aquí: null si
+    // ESPEPARA no está disponible en esta instalación o no tiene fila para este CN.
+    const dispensacion = r.dispensacion_consejo != null ? String(r.dispensacion_consejo).trim() || null : null;
+    const tipoConsejo  = r.tipo_consejo != null ? String(r.tipo_consejo).trim() || null : null;
+    const aportacion   = r.aportacion_consejo != null ? String(r.aportacion_consejo).trim() || null : null;
+
+    // Stock (Fase 4) — enteros o null si la instalación no tiene esas columnas.
+    const stockActual         = r.stock_actual != null ? Math.round(Number(r.stock_actual)) : null;
+    const stockMinimoFarmatic = r.stock_minimo_farmatic != null ? Math.round(Number(r.stock_minimo_farmatic)) : null;
+    const stockMaximoFarmatic = r.stock_maximo_farmatic != null ? Math.round(Number(r.stock_maximo_farmatic)) : null;
+
     return {
       codigo_nacional:  cn,
       nombre,
@@ -562,6 +595,22 @@ async function fetchProductos() {
       tipo_origen:      tipoOrigen,
       es_generico:      esGenerico,
       es_secundario,
+      // Módulo Receta (documento de diseño v4.0, Fase 1) — clasificación cruda del Consejo/BOT
+      // PLUS, distinta de "tipo" (GENÉRICO/ÉTICO, ya calculado arriba): dispensacion decide
+      // si el producto entra en el universo de Receta (Railway filtra DISPENSACION='R' en
+      // Fase 2), tipo_consejo es el campo TIPO de ESPEPARA (no confundir con "tipo" de más
+      // arriba), efg es el valor crudo (antes solo se usaba para decidir esGenerico, ahora
+      // también se envía tal cual).
+      dispensacion,
+      tipo_consejo:     tipoConsejo,
+      efg:              efgConsejo,
+      aportacion,
+      // Stock (Fase 4) — stock_minimo_farmatic/stock_maximo_farmatic son el valor TAL CUAL
+      // en Farmatic ahora mismo, distinto de la propuesta propia de NextFarma (stock_objetivo
+      // en Railway, calculada por velocidad de rotación) — ver documento §5.3/§7.
+      stock_actual:            stockActual,
+      stock_minimo_farmatic:   stockMinimoFarmatic,
+      stock_maximo_farmatic:   stockMaximoFarmatic,
     };
   }).filter(Boolean);
 
@@ -2015,6 +2064,44 @@ async function procesarCambiosPendientes(cambios) {
   return { procesados, errores, ids_procesados };
 }
 
+// Módulo Receta (documento de diseño v4.0, Fase 6) — escritura de Mín/Máx de stock en
+// Farmatic. A diferencia de favorito/categoría (que mueven el CN entre listas de Farmatic,
+// ver procesarCambiosPendientes arriba), esto es un UPDATE directo y simple sobre
+// Articu.StockMinimo/StockMaximo — no depende del wizard de listas (getCategoriaLista), así
+// que puede escribir aunque ese wizard no esté configurado. El candado de "no escribir si el
+// titular no quiere" ya lo aplica Railway (solo entrega cambios si farmatic_write_enabled).
+async function procesarStockPendientes(cambios) {
+  if (!cambios || cambios.length === 0) return { procesados: 0, errores: 0, ids_procesados: [] };
+  const p = await getPool();
+  let procesados = 0, errores = 0;
+  const ids_procesados = [];
+
+  for (const cambio of cambios) {
+    try {
+      const { cn, stock_min_nuevo, stock_max_nuevo } = cambio;
+      if (stock_min_nuevo == null || stock_max_nuevo == null) {
+        log.warn(`Cambio de stock CN ${cn} sin mín/máx completo — omitido`);
+        errores++;
+        continue;
+      }
+      await p.request()
+        .input('cn',  sql.Int, cn)
+        .input('min', sql.Int, Math.round(stock_min_nuevo))
+        .input('max', sql.Int, Math.round(stock_max_nuevo))
+        .query(`UPDATE Articu SET StockMinimo = @min, StockMaximo = @max WHERE IdArticu = @cn`);
+
+      log.info(`Stock actualizado: CN ${cn} → mín ${stock_min_nuevo} / máx ${stock_max_nuevo}`);
+      procesados++;
+      ids_procesados.push(cambio.id);
+    } catch (err) {
+      log.error('Error procesando stock CN ' + cambio.cn + ':', err.message);
+      errores++;
+    }
+  }
+
+  return { procesados, errores, ids_procesados };
+}
+
 // Lista Negra: pipeline independiente de getCategoriaLista()/procesarCambiosPendientes.
 // Usa su propio env var (LIST_NEGRA) y, si no está configurado, simplemente omite
 // el procesado sin afectar al resto del sync (favoritos/categorías siguen su curso
@@ -2326,6 +2413,7 @@ module.exports = {
   verificarTablas,
   fetch4DBDescuentos,
   procesarCambiosPendientes,
+  procesarStockPendientes,
   procesarListaNegraPendiente,
   getCategoriaLista,
   detectarListasPorNombre,
