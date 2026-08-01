@@ -451,8 +451,13 @@ async function fetchProductos() {
   // usarse para clasificar, pero el producto de Farmatic sigue existiendo igual — así el
   // LEFT JOIN simplemente no matchea esa fila (deja NULL) en vez de excluir el producto
   // entero, que es justo lo que pasaría si el filtro fuera un WHERE.
+  // BUG corregido 2026-08-01: estaba unido por bpc.CODIGO (BP_CONJARTI), que es NULL para
+  // cualquier CN sin grupo homogéneo — significaba que un huérfano (justo el caso que
+  // Receta Fase 3 necesita clasificar como DISPENSACION='R' para incluirlo) nunca podía
+  // tener fila de ESPEPARA, aunque existiera. El documento de diseño (§1.1) confirma el
+  // join correcto: contra a.IdArticu directo, igual que ya hace BP_CONJARTI más abajo.
   const joinEspepara = espeparaDisponible
-    ? `LEFT JOIN ${cdb}.dbo.ESPEPARA espe ON espe.CODIGO = bpc.CODIGO AND espe.FECHABAJA IS NULL`
+    ? `LEFT JOIN ${cdb}.dbo.ESPEPARA espe ON LTRIM(RTRIM(espe.CODIGO)) = LTRIM(RTRIM(a.IdArticu)) AND espe.FECHABAJA IS NULL`
     : '';
   // DISPENSACION/TIPO/APORTACION — Módulo Receta (documento de diseño v4.0, Fase 1): mismo join que
   // ya trae EFG, solo se amplía el SELECT. Solo se traen y envían a Railway aquí; el filtro
