@@ -210,7 +210,24 @@ INSERT INTO Articu (IdArticu, Descripcion, Laboratorio, Pvp, Pvl, Puc, IVA, Efp,
   -- huérfano: no aparece en BP_CONJARTI/BP_CONJUNTOS más abajo, ni tiene fila en GeneArti.
   -- Con DISPENSACION='R' en ESPEPARA + venta real reciente, debe entrar al universo de
   -- Receta como GH único (ch sintético negativo) — sin este caso no se prueba la Fase 3.
-  ('1500001', N'ADALIMUMAB 40MG JERINGA PRECARGADA 2 UDS', 'E0863', 285.40, 245.60, 245.60, '4', 0, 1, 0, 0, 3, 1, 2);
+  ('1500001', N'ADALIMUMAB 40MG JERINGA PRECARGADA 2 UDS', 'E0863', 285.40, 245.60, 245.60, '4', 0, 1, 0, 0, 3, 1, 2),
+  -- Segundo huérfano genuino — mismo caso que 1500001 pero patrón "sobrestock" distinto,
+  -- para no depender de un único ejemplo de GH único al probar Fase 3.
+  ('1500002', N'RIVASTIGMINA 4,6MG/24H 30 PARCHES TRANSDERMICOS', 'E0863', 95.20, 82.10, 82.10, '4', 0, 1, 0, 0, 22, 6, 12),
+  -- 4 GH nuevos, cada uno con 2-3 laboratorios — para tener sustitución real que enseñar en
+  -- Genéricos (no solo GH único de Receta). PVPMENOR de cada CODConjunto (ver BP_CONJUNTOS
+  -- más abajo) se fija al Pvp más alto del grupo, para no repetir el filtro pvpSuperior que
+  -- descartó 1000001/1000002/1000004/1000008.
+  ('3000001', N'SIMVASTATINA CINFA 20MG 28 COMP EFG',   'E0111', 3.20, 1.73, 1.64, '4', 0, 1, 0, 0, 24, 13, 20),
+  ('3000002', N'SIMVASTATINA NORMON 20MG 28 COMP EFG',  'E0426', 3.15, 1.70, 1.61, '4', 0, 1, 0, 0, 18, 13, 20),
+  ('3000003', N'SIMVASTATINA KERN 20MG 28 COMP EFG',    'E0863', 3.25, 1.75, 1.66, '4', 0, 1, 0, 0, 12, 13, 20),
+  ('3000004', N'LOSARTAN CINFA 50MG 28 COMP EFG',       'E0111', 4.10, 2.21, 2.10, '4', 0, 1, 0, 0, 16, 13, 20),
+  ('3000005', N'LOSARTAN TEVA 50MG 28 COMP EFG',        'E1079', 4.05, 2.18, 2.07, '4', 0, 1, 0, 0, 10, 13, 20),
+  ('3000006', N'ENALAPRIL NORMON 20MG 30 COMP EFG',     'E0426', 2.95, 1.59, 1.51, '4', 0, 1, 0, 0,  4, 15, 25),
+  ('3000007', N'ENALAPRIL KERN 20MG 30 COMP EFG',       'E0863', 3.00, 1.62, 1.54, '4', 0, 1, 0, 0, 20, 15, 25),
+  ('3000008', N'AMLODIPINO CINFA 10MG 30 COMP EFG',     'E0111', 1.85, 1.00, 0.94, '4', 0, 1, 0, 0, 30, 15, 25),
+  ('3000009', N'AMLODIPINO NORMON 10MG 30 COMP EFG',    'E0426', 1.80, 0.97, 0.92, '4', 0, 1, 0, 0, 22, 15, 25),
+  ('3000010', N'AMLODIPINO TEVA 10MG 30 COMP EFG',      'E1079', 1.90, 1.02, 0.97, '4', 0, 1, 0, 0, 14, 15, 25);
 GO
 
 INSERT INTO GeneArti (IdArticu, IdGrupoGen, EFG) VALUES
@@ -220,7 +237,17 @@ INSERT INTO GeneArti (IdArticu, IdGrupoGen, EFG) VALUES
   ('1000004', 104, 1),
   ('1000005', 101, 1),
   ('1000007', 105, 1),
-  ('1000008', 106, 1);
+  ('1000008', 106, 1),
+  ('3000001', 107, 1),
+  ('3000002', 107, 1),
+  ('3000003', 107, 1),
+  ('3000004', 108, 1),
+  ('3000005', 108, 1),
+  ('3000006', 109, 1),
+  ('3000007', 109, 1),
+  ('3000008', 110, 1),
+  ('3000009', 110, 1),
+  ('3000010', 110, 1);
 GO
 
 -- Ventas 2024 (enero–diciembre)
@@ -415,6 +442,34 @@ INSERT INTO LineaVenta (IdVenta, Codigo, Cantidad, ImporteNeto, PVP) VALUES
   (30, '1500001', 1, 285.40, 285.40);
 GO
 
+-- Ventas mensuales (mayo/junio/julio 2026) para los 4 GH nuevos multi-laboratorio y para
+-- 1500002 — cada laboratorio con un volumen distinto dentro de su grupo, para que la
+-- sustitución/favorito/color de Genéricos tengan sentido (no todo a cero ni empatado).
+-- IdVenta 31-33 (una "cesta" por mes, tras las 30 anteriores).
+INSERT INTO Venta (Ejercicio, Mes, FechaHora, XVend_IdVendedor, XClie_IdCliente, TipoVenta, TotalVenta, Facturada) VALUES
+  (2026, 5, '2026-05-12 10:00', 1, 1001, 'C', 193.25, 1),
+  (2026, 6, '2026-06-14 11:00', 2, 1002, 'C', 193.25, 1),
+  (2026, 7, '2026-07-10 09:30', 3, 1003, 'C', 193.25, 1);
+GO
+
+INSERT INTO LineaVenta (IdVenta, Codigo, Cantidad, ImporteNeto, PVP) VALUES
+  (31, '3000001', 4, 12.80, 3.20), (31, '3000002', 2,  6.30, 3.15), (31, '3000003', 1,  3.25, 3.25),
+  (31, '3000004', 5, 20.50, 4.10), (31, '3000005', 2,  8.10, 4.05),
+  (31, '3000006', 3,  8.85, 2.95), (31, '3000007', 6, 18.00, 3.00),
+  (31, '3000008', 7, 12.95, 1.85), (31, '3000009', 3,  5.40, 1.80), (31, '3000010', 1,  1.90, 1.90),
+  (31, '1500002', 1, 95.20, 95.20),
+  (32, '3000001', 4, 12.80, 3.20), (32, '3000002', 2,  6.30, 3.15), (32, '3000003', 1,  3.25, 3.25),
+  (32, '3000004', 5, 20.50, 4.10), (32, '3000005', 2,  8.10, 4.05),
+  (32, '3000006', 3,  8.85, 2.95), (32, '3000007', 6, 18.00, 3.00),
+  (32, '3000008', 7, 12.95, 1.85), (32, '3000009', 3,  5.40, 1.80), (32, '3000010', 1,  1.90, 1.90),
+  (32, '1500002', 1, 95.20, 95.20),
+  (33, '3000001', 4, 12.80, 3.20), (33, '3000002', 2,  6.30, 3.15), (33, '3000003', 1,  3.25, 3.25),
+  (33, '3000004', 5, 20.50, 4.10), (33, '3000005', 2,  8.10, 4.05),
+  (33, '3000006', 3,  8.85, 2.95), (33, '3000007', 6, 18.00, 3.00),
+  (33, '3000008', 7, 12.95, 1.85), (33, '3000009', 3,  5.40, 1.80), (33, '3000010', 1,  1.90, 1.90),
+  (33, '1500002', 1, 95.20, 95.20);
+GO
+
 -- Tablas 4DB (catálogo de distribuidor: PVL negociado + descuentos por modelo)
 CREATE TABLE _4DB_CAT_CatalogoArt (
   codigoNacional INT,
@@ -440,7 +495,19 @@ INSERT INTO _4DB_CAT_CatalogoArt (codigoNacional, pvl, catalogo, iva) VALUES
   (1000005, 2.45, 1, 'S'),
   (1000006, 1.18, 1, 'S'),
   (1000007, 1.02, 1, 'S'),
-  (1000008, 0.95, 1, 'S');
+  (1000008, 0.95, 1, 'S'),
+  -- 4 GH nuevos — descuentos distintos por laboratorio dentro de cada grupo, para que el
+  -- ranking verde/amarillo/gris de Genéricos tenga sentido (no todos empatados).
+  (3000001, 1.73, 1, 'S'),
+  (3000002, 1.70, 1, 'S'),
+  (3000003, 1.75, 1, 'S'),
+  (3000004, 2.21, 1, 'S'),
+  (3000005, 2.18, 1, 'S'),
+  (3000006, 1.59, 1, 'S'),
+  (3000007, 1.62, 1, 'S'),
+  (3000008, 1.00, 1, 'S'),
+  (3000009, 0.97, 1, 'S'),
+  (3000010, 1.02, 1, 'S');
 GO
 
 INSERT INTO _4DB_CAT_Models (codigonacional, discount, nombre, catalogo) VALUES
@@ -449,6 +516,16 @@ INSERT INTO _4DB_CAT_Models (codigonacional, discount, nombre, catalogo) VALUES
   (1000003, 4.00, 'NEXO',            1),
   (1000004, 5.00, 'COFARES DIRECTO', 1),
   (1000005, 3.00, 'NEXO',            1),
+  (3000001, 5.00, 'COFARES DIRECTO', 1),
+  (3000002, 4.00, 'NEXO',            1),
+  (3000003, 3.00, 'NEXO',            1),
+  (3000004, 5.00, 'COFARES DIRECTO', 1),
+  (3000005, 3.00, 'NEXO',            1),
+  (3000006, 4.00, 'NEXO',            1),
+  (3000007, 5.00, 'COFARES DIRECTO', 1),
+  (3000008, 5.00, 'COFARES DIRECTO', 1),
+  (3000009, 4.00, 'NEXO',            1),
+  (3000010, 3.00, 'NEXO',            1),
   (1000006, 4.00, 'COFARES DIRECTO', 1),
   (1000007, 3.00, 'NEXO',            1),
   (1000008, 5.00, 'COFARES DIRECTO', 1);
@@ -476,13 +553,21 @@ CREATE TABLE BP_CONJARTI (
 );
 GO
 
+-- PVPMENOR fijado al Pvp más alto de cada grupo (ver Articu más arriba) — con el valor
+-- original (más bajo que algún miembro), fetchProductos() descartaba 1000001/1000002/
+-- 1000004/1000008 enteros como "pvpSuperior" (dato inconsistente) y nunca llegaban a
+-- Railway. No es un caso de prueba deliberado, era un desajuste de los datos de origen.
 INSERT INTO BP_CONJUNTOS (CODCONJUNTO, CODCCAA, NOMBRE, PVPMENOR, TIPO) VALUES
-  (101, 0, N'IBUPROFENO 600MG EFG',    4.70, 'EFG'),
-  (102, 0, N'PARACETAMOL 1G EFG',      2.28, 'EFG'),
+  (101, 0, N'IBUPROFENO 600MG EFG',    5.58, 'EFG'),
+  (102, 0, N'PARACETAMOL 1G EFG',      2.82, 'EFG'),
   (103, 0, N'AMOXICILINA 500MG EFG',   3.49, 'EFG'),
-  (104, 0, N'OMEPRAZOL 20MG EFG',      1.36, 'EFG'),
+  (104, 0, N'OMEPRAZOL 20MG EFG',      1.62, 'EFG'),
   (105, 0, N'METFORMINA 850MG EFG',    2.12, 'EFG'),
-  (106, 0, N'ATORVASTATINA 20MG EFG',  1.62, 'EFG');
+  (106, 0, N'ATORVASTATINA 20MG EFG',  1.94, 'EFG'),
+  (107, 0, N'SIMVASTATINA 20MG EFG',   3.25, 'EFG'),
+  (108, 0, N'LOSARTAN 50MG EFG',       4.10, 'EFG'),
+  (109, 0, N'ENALAPRIL 20MG EFG',      3.00, 'EFG'),
+  (110, 0, N'AMLODIPINO 10MG EFG',     1.90, 'EFG');
 GO
 
 INSERT INTO BP_CONJARTI (CODIGO, CODConjunto, CODCCAA) VALUES
@@ -492,7 +577,17 @@ INSERT INTO BP_CONJARTI (CODIGO, CODConjunto, CODCCAA) VALUES
   ('1000003', 103, 0),
   ('1000004', 104, 0),
   ('1000007', 105, 0),
-  ('1000008', 106, 0);
+  ('1000008', 106, 0),
+  ('3000001', 107, 0),
+  ('3000002', 107, 0),
+  ('3000003', 107, 0),
+  ('3000004', 108, 0),
+  ('3000005', 108, 0),
+  ('3000006', 109, 0),
+  ('3000007', 109, 0),
+  ('3000008', 110, 0),
+  ('3000009', 110, 0),
+  ('3000010', 110, 0);
 GO
 
 -- ============================================================
@@ -526,9 +621,21 @@ INSERT INTO ESPEPARA (CODIGO, DISPENSACION, TIPO, EFG, APORTACION, FECHABAJA) VA
   -- tengan ventas reales (ver documento §3.1, filtro maestro DISPENSACION='R').
   ('2000001', NULL, 'P', NULL, NULL, NULL),
   ('2000002', NULL, 'P', NULL, NULL, NULL),
-  -- Hospitalario de dispensación ambulatoria, sin bioequivalente (Fase 3, GH único genuino
-  -- por huérfano — no tiene fila en BP_CONJARTI).
-  ('1500001', 'R', 'E', NULL, 'TLD', NULL);
+  -- Hospitalarios de dispensación ambulatoria, sin bioequivalente (Fase 3, GH único genuino
+  -- por huérfano — no tienen fila en BP_CONJARTI).
+  ('1500001', 'R', 'E', NULL, 'TLD', NULL),
+  ('1500002', 'R', 'E', NULL, 'TLD', NULL),
+  -- 4 GH nuevos multi-laboratorio (sustitución real para Genéricos, no solo GH único).
+  ('3000001', 'R', 'E', 'EFG', 'AJ', NULL),
+  ('3000002', 'R', 'E', 'EFG', 'AJ', NULL),
+  ('3000003', 'R', 'E', 'EFG', 'AJ', NULL),
+  ('3000004', 'R', 'E', 'EFG', 'AJ', NULL),
+  ('3000005', 'R', 'E', 'EFG', 'AJ', NULL),
+  ('3000006', 'R', 'E', 'EFG', 'AJ', NULL),
+  ('3000007', 'R', 'E', 'EFG', 'AJ', NULL),
+  ('3000008', 'R', 'E', 'EFG', 'AJ', NULL),
+  ('3000009', 'R', 'E', 'EFG', 'AJ', NULL),
+  ('3000010', 'R', 'E', 'EFG', 'AJ', NULL);
 GO
 
 PRINT 'Inicialización completada: Farmatic + Consejo con datos de prueba';
