@@ -108,6 +108,28 @@ async function enviarRecepciones(recepciones) {
   return totals;
 }
 
+// Detalle línea a línea de recepciones (Módulo Compras, Fase 3) — distinto de
+// enviarRecepciones() (que solo manda el precio real más reciente por CN para cns.pc): esto
+// manda cada línea de albarán tal cual, para que el backend pueda cerrar automáticamente la
+// fase "Recibido" de un pedido cuando detecta que ya llegó.
+async function enviarRecepcionesDetalle(lineas) {
+  const batchSize = parseInt(process.env.BATCH_SIZE, 10) || 500;
+  const batches    = chunk(lineas, batchSize);
+  const totals     = { total: 0, upserts: 0, errors: 0 };
+  for (let i = 0; i < batches.length; i++) {
+    if (abortRequested) { log.warn(`Envío de recepciones (detalle) cancelado (${i}/${batches.length} lotes enviados)`); throw new SyncAbortedError(); }
+    log.info(`Enviando lote recepciones-detalle ${i + 1}/${batches.length} (${batches[i].length})...`);
+    try {
+      const r = await request('/api/sync/recepciones-detalle', { method: 'POST', body: { lineas: batches[i] } });
+      totals.total += r.total; totals.upserts += r.upserts; totals.errors += r.errors;
+    } catch (err) {
+      log.error(`Lote ${i + 1} falló:`, err.message);
+      totals.errors += batches[i].length;
+    }
+  }
+  return totals;
+}
+
 async function enviarFavoritos(favoritos) {
   try {
     return await request('/api/sync/favoritos', { method: 'POST', body: { favoritos } });
@@ -320,6 +342,7 @@ module.exports = {
   enviarProductos,
   enviarVentas,
   enviarRecepciones,
+  enviarRecepcionesDetalle,
   enviarFavoritos,
   enviarTopLaboratorios,
   getCambiosPendientes,

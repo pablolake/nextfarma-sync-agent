@@ -386,6 +386,17 @@ async function runSync(opts = {}) {
     step('recepciones', 'Recepciones no disponibles — precios de albarán omitidos', 'warn');
   }
 
+  // Detalle línea a línea (Módulo Compras, Fase 3) — para que el backend pueda cerrar solo
+  // la fase "Recibido" de un pedido cuando detecta que ya llegó. Ventana corta (45 días):
+  // solo hace falta para pedidos recientes, no doce meses como arriba.
+  let recepcionesDetalle = [];
+  try {
+    recepcionesDetalle = await farmatic.fetchRecepcionesDetalle(45);
+    log.info(`✓ ${recepcionesDetalle.length} líneas de recepción leídas (últimos 45 días)`);
+  } catch (e) {
+    log.warn('Recepciones (detalle) no disponibles:', e.message);
+  }
+
   // Priority 1: 4DB (Cofares Conecta 4D) — most accurate, normalized to decimal in farmatic-client
   let map4DB = new Map();
   try {
@@ -547,6 +558,15 @@ async function runSync(opts = {}) {
     }
   } else {
     log.info('Recepciones: sin datos o tablas no disponibles.');
+  }
+
+  if (recepcionesDetalle.length > 0) {
+    try {
+      const r = await api.enviarRecepcionesDetalle(recepcionesDetalle);
+      log.info(`✓ Recepciones (detalle): ${r.upserts} líneas procesadas`);
+    } catch (e) {
+      log.warn('Error enviando recepciones (detalle):', e.message);
+    }
   }
 
   if (api.isAbortRequested()) {

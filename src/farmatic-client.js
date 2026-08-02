@@ -855,6 +855,89 @@ async function fetchRecepcionesRecientes(mesesAtras = 12) {
   }));
 }
 
+// Hermana de fetchRecepcionesRecientes() — esa colapsa a una fila por CN (la recepción más
+// reciente, para actualizar cns.pc). Esta NO colapsa: manda una fila por cada línea de
+// albarán de los últimos `diasAtras` días, con su id_recep — es lo que necesita el backend
+// (Módulo Compras, Fase 3) para saber si un pedido concreto ya ha llegado y cerrar solo la
+// fase "Recibido"/"Recepcionado en Farmatic", sin depender de que alguien lo marque a mano.
+// Ventana corta (45 días por defecto) a propósito: solo hace falta detectar recepciones de
+// pedidos recientes, no un histórico largo como en fetchRecepcionesRecientes (12 meses).
+async function fetchRecepcionesDetalle(diasAtras = 45) {
+  const p = await getPool();
+
+  const tablas = await p.request().query(`SELECT name FROM sys.tables WHERE name IN ('Recep', 'LineaRecep')`);
+  const existe = new Set(tablas.recordset.map(r => r.name));
+  if (!existe.has('Recep') || !existe.has('LineaRecep')) {
+    log.warn('Tablas Recep/LineaRecep no encontradas (detalle).');
+    return [];
+  }
+
+  const colsR = await p.request().query(
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'LineaRecep'`
+  );
+  const colsLR = new Set(colsR.recordset.map(c => String(c.COLUMN_NAME)));
+
+  const colCodigo = await resolverAtributoColumna({
+    entidad: 'LINEA_RECEP', atributo: 'codigo', candidatos: ['Codigo', 'IdArticu'],
+    columnasReales: colsLR, descripcion: 'Columna de LineaRecep con el código nacional o identificador del artículo recibido en cada línea de recepción/albarán.',
+  });
+  const colCantidad = await resolverAtributoColumna({
+    entidad: 'LINEA_RECEP', atributo: 'cantidad', candidatos: ['Cantidad'],
+    columnasReales: colsLR, descripcion: 'Columna de LineaRecep con la cantidad de unidades recibidas en cada línea.',
+  });
+  if (!colCodigo || !colCantidad) {
+    log.warn('LineaRecep sin columnas clave (detalle)');
+    return [];
+  }
+
+  const colsR2 = await p.request().query(
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Recep'`
+  );
+  const colsRec  = new Set(colsR2.recordset.map(c => String(c.COLUMN_NAME)));
+  const colFecha = await resolverAtributoColumna({
+    entidad: 'RECEP', atributo: 'fecha', candidatos: ['FechaAlbaran', 'Fecha', 'FechaRecep'],
+    columnasReales: colsRec, descripcion: 'Columna de Recep con la fecha del albarán/recepción de mercancía.',
+  });
+  if (!colFecha) { log.warn('Recep sin columna de fecha (detalle).'); return []; }
+
+  const fechaLim = new Date();
+  fechaLim.setDate(fechaLim.getDate() - diasAtras);
+  const fechaISO = fechaLim.toISOString().slice(0, 10);
+
+  const result = await p.request()
+    .input('fecha', sql.Date, fechaISO)
+    .query(`
+      SELECT
+        LTRIM(RTRIM(lr.${colCodigo})) AS codigo_nacional,
+        r.${colFecha}                 AS fecha,
+        lr.${colCantidad}             AS cantidad,
+        r.IdRecep                     AS id_recep
+      FROM LineaRecep lr
+      INNER JOIN Recep r ON lr.IdRecep = r.IdRecep
+      WHERE r.${colFecha} >= @fecha
+        AND lr.${colCantidad} > 0
+        AND lr.${colCodigo} IS NOT NULL
+    `).catch(err => { log.warn('fetchRecepcionesDetalle falló:', err.message); return { recordset: [] }; });
+
+  const lineas = [];
+  for (const r of result.recordset) {
+    const cn = String(r.codigo_nacional).trim();
+    if (!cn || !/^\d{5,}$/.test(cn)) continue;
+    const fecha = new Date(r.fecha);
+    if (isNaN(fecha.getTime())) continue;
+    const cantidad = Number(r.cantidad);
+    if (isNaN(cantidad) || cantidad <= 0) continue;
+    if (r.id_recep == null) continue;
+    lineas.push({
+      codigo_nacional: cn,
+      fecha:           fecha.toISOString().slice(0, 10),
+      cantidad,
+      id_recep:        String(r.id_recep),
+    });
+  }
+  return lineas;
+}
+
 async function verificarTablas() {
   const p   = await getPool();
   const cdb = CONSEJO_DB();
@@ -2410,6 +2493,7 @@ module.exports = {
   fetchVentasMensuales,
   ventanaMesesRecientes,
   fetchRecepcionesRecientes,
+  fetchRecepcionesDetalle,
   fetchFavoritosListas,
   fetchFavoritosActuales,
   fetchTicketMedio,
