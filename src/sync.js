@@ -7,6 +7,7 @@ const farmatic = require('./farmatic-client');
 const api      = require('./api-client');
 const log      = require('./logger');
 const { syncCronicos, syncCronicosClientes, syncClientesResumen } = require('./cronicos_sync');
+const { syncFidelidadMarca } = require('./fidelidad_marca_sync');
 
 const { PVL_FACTOR } = farmatic;
 
@@ -671,6 +672,13 @@ async function runSync(opts = {}) {
     await syncClientesResumen(api, log);
   } catch (e) {
     log.warn('syncClientesResumen omitido:', e.message);
+  }
+
+  try {
+    const pool = await farmatic.getPool();
+    await syncFidelidadMarca(pool, api, log);
+  } catch (e) {
+    log.warn('syncFidelidadMarca omitido:', e.message);
   }
 
   try {
