@@ -889,6 +889,19 @@ async function fetchRecepcionesDetalle(diasAtras = 45) {
     log.warn('LineaRecep sin columnas clave (detalle)');
     return [];
   }
+  // Módulo Compras Fase 2 — verificación de discrepancia de PC en el albarán necesita el
+  // precio real por línea, no solo si llegó o no. Mismos candidatos que fetchRecepcionesRecientes
+  // (comparten mapeoEsquema, ya resuelto para la mayoría de instalaciones que sincronizan
+  // catálogo antes de tener pedidos en Compras) — aquí opcional: si no se resuelve, se manda
+  // la línea igual sin precio (el backend ya distingue "sin dato" de "discrepancia real").
+  const colPrecio = await resolverAtributoColumna({
+    entidad: 'LINEA_RECEP', atributo: 'precio', candidatos: ['PrecioNeto', 'Precio', 'PrecioUnit', 'PrecioCompra', 'Importe'],
+    columnasReales: colsLR, descripcion: 'Columna de LineaRecep con el precio neto de compra de cada línea de recepción.',
+  });
+  const colBonif = await resolverAtributoColumna({
+    entidad: 'LINEA_RECEP', atributo: 'bonificacion', candidatos: ['Bonificacion', 'Dto', 'Descuento', 'PctBonif'],
+    columnasReales: colsLR, descripcion: 'Columna de LineaRecep con el porcentaje de bonificación/descuento del proveedor en la recepción, si existe.',
+  });
 
   const colsR2 = await p.request().query(
     `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Recep'`
@@ -904,6 +917,9 @@ async function fetchRecepcionesDetalle(diasAtras = 45) {
   fechaLim.setDate(fechaLim.getDate() - diasAtras);
   const fechaISO = fechaLim.toISOString().slice(0, 10);
 
+  const selPrecio = colPrecio ? `lr.${colPrecio} AS precio_neto,` : `NULL AS precio_neto,`;
+  const selBonif  = colBonif  ? `lr.${colBonif} AS bonificacion,`  : `NULL AS bonificacion,`;
+
   const result = await p.request()
     .input('fecha', sql.Date, fechaISO)
     .query(`
@@ -911,6 +927,8 @@ async function fetchRecepcionesDetalle(diasAtras = 45) {
         LTRIM(RTRIM(lr.${colCodigo})) AS codigo_nacional,
         r.${colFecha}                 AS fecha,
         lr.${colCantidad}             AS cantidad,
+        ${selPrecio}
+        ${selBonif}
         r.IdRecep                     AS id_recep
       FROM LineaRecep lr
       INNER JOIN Recep r ON lr.IdRecep = r.IdRecep
@@ -928,11 +946,16 @@ async function fetchRecepcionesDetalle(diasAtras = 45) {
     const cantidad = Number(r.cantidad);
     if (isNaN(cantidad) || cantidad <= 0) continue;
     if (r.id_recep == null) continue;
+    const precioNeto = r.precio_neto != null && Number(r.precio_neto) > 0 ? +Number(r.precio_neto).toFixed(4) : null;
+    let bonificacionPct = r.bonificacion != null ? Number(r.bonificacion) : null;
+    if (bonificacionPct != null && (isNaN(bonificacionPct) || bonificacionPct < 0 || bonificacionPct > 100)) bonificacionPct = null;
     lineas.push({
       codigo_nacional: cn,
       fecha:           fecha.toISOString().slice(0, 10),
       cantidad,
       id_recep:        String(r.id_recep),
+      precio_neto:     precioNeto,
+      bonificacion_pct: bonificacionPct != null ? +(bonificacionPct > 1 ? bonificacionPct / 100 : bonificacionPct).toFixed(4) : null,
     });
   }
   return lineas;
@@ -1001,6 +1024,114 @@ async function fetch4DBDescuentos() {
       return v > 1 ? +(v / 100).toFixed(4) : +v.toFixed(4);
     })(),
   })).filter(r => /^\d{5,}$/.test(r.codigo_nacional));
+}
+
+// Módulo Publicitarios (OTC/parafarmacia) — Fase 3.2 del plan. Universo DISJUNTO del de
+// Genéricos (codigo_gh/BP_CONJARTI con CODCCAA=0 en fetchProductos): aquí NO se filtra por
+// CODCCAA=0 porque el filtro maestro de Publicitarios (DISPENSACION='_' AND TIPO='E') puede
+// dejar un CN sin fila nacional — hay que decidir un CODConjunto canónico entre las filas de
+// CCAA que sí existan.
+//
+// No hay acceso a un Farmatic real para verificar dos supuestos de la spec original antes de
+// programar (decisión tomada explícitamente: no bloquear el desarrollo por eso, ver plan
+// "Riesgos y huecos abiertos" 1 y 3):
+//   1. Que DISPENSACION valga literalmente el carácter '_' (y no NULL, o algún otro valor).
+//   2. Que la multiplicidad de CODCCAA sin fila nacional sea un caso raro.
+// Por eso esta función empieza siempre con un diagnóstico defensivo (login estructurado, no
+// bloqueante) de ambos puntos — la primera vez que corra contra un Farmatic real hay que
+// revisar estos logs antes de confiar en el filtro/regla tal como están escritos (recordatorio
+// explícito en el plan, sección "Seguimiento inmediato").
+async function fetchPublicitariosGP() {
+  const p   = await getPool();
+  const cdb = CONSEJO_DB();
+
+  let espeparaDisponible = false;
+  try {
+    await p.request().query(`SELECT TOP 1 1 FROM ${cdb}.dbo.ESPEPARA`);
+    espeparaDisponible = true;
+  } catch (e) {
+    log.warn(`ESPEPARA no disponible — Publicitarios (OTC) no se puede clasificar: ${e.message}`);
+    return [];
+  }
+
+  // Diagnóstico defensivo 1/2: distribución real de DISPENSACION/TIPO en esta instalación.
+  try {
+    const distR = await p.request().query(
+      `SELECT DISPENSACION, TIPO, COUNT(*) AS n FROM ${cdb}.dbo.ESPEPARA GROUP BY DISPENSACION, TIPO ORDER BY n DESC`
+    );
+    log.info(`[diagnóstico Publicitarios] Distribución DISPENSACION/TIPO en ESPEPARA: ${
+      distR.recordset.map(r => `${JSON.stringify(r.DISPENSACION)}/${JSON.stringify(r.TIPO)}=${r.n}`).join(', ')
+    }`);
+  } catch (e) {
+    log.warn(`No se pudo obtener el diagnóstico de DISPENSACION/TIPO: ${e.message}`);
+  }
+
+  // Filtro maestro (spec v1.0): mostrador OTC/parafarmacia, excluyendo el rango 140000-140999
+  // (sin documentar por qué en la spec original — aplicado tal cual, revisar si el diagnóstico
+  // de arriba muestra algo inesperado). TRY_CAST porque CODIGO puede no ser puramente numérico
+  // en algunas instalaciones (mismo motivo por el que fetchProductos usa regex, no cast, para
+  // validar el CN).
+  const result = await p.request().query(`
+    SELECT DISTINCT e.CODIGO AS cn, c.CODConjunto AS gp, c.CODCCAA AS ccaa, cj.NOMBRE AS gp_nombre,
+      (SELECT COUNT(DISTINCT c2.CODIGO) FROM ${cdb}.dbo.BP_CONJARTI c2 WHERE c2.CODConjunto = c.CODConjunto) AS n_miembros
+    FROM ${cdb}.dbo.ESPEPARA e
+    JOIN ${cdb}.dbo.BP_CONJARTI c ON c.CODIGO = e.CODIGO
+    LEFT JOIN ${cdb}.dbo.BP_CONJUNTOS cj ON cj.CODCONJUNTO = c.CODConjunto AND cj.CODCCAA = c.CODCCAA
+    WHERE e.DISPENSACION = '_' AND e.TIPO = 'E'
+      AND TRY_CAST(e.CODIGO AS BIGINT) NOT BETWEEN 140000 AND 140999
+  `).catch(err => { log.warn('fetchPublicitariosGP falló:', err.message); return { recordset: [] }; });
+
+  // Un CN puede traer varias filas (una por CODCCAA) — regla canónica (plan Fase 3, 3.2):
+  // preferir CODCCAA=0 (nacional); si no existe, el CODConjunto mayoritario entre las filas
+  // de CCAA de ese CN; empate → el numéricamente menor.
+  const porCn = new Map();
+  for (const row of result.recordset) {
+    const cn = String(row.cn || '').trim();
+    if (!cn || !/^\d{5,}$/.test(cn)) continue;
+    const gp = row.gp != null ? Number(row.gp) : null;
+    if (gp == null) continue;
+    if (!porCn.has(cn)) porCn.set(cn, []);
+    porCn.get(cn).push({
+      gp, ccaa: Number(row.ccaa),
+      nombre: row.gp_nombre ? String(row.gp_nombre).trim() : null,
+      nMiembros: Number(row.n_miembros || 0),
+    });
+  }
+
+  let multiplesSinNacional = 0;
+  const gps = [];
+  for (const [cn, filas] of porCn) {
+    const nacional = filas.find(f => f.ccaa === 0);
+    let elegido;
+    if (nacional) {
+      elegido = nacional;
+    } else {
+      if (filas.length > 1) multiplesSinNacional++;
+      const conteo = new Map();
+      for (const f of filas) conteo.set(f.gp, (conteo.get(f.gp) || 0) + 1);
+      let mejorGp = null, mejorN = -1;
+      for (const [gp, n] of conteo) {
+        if (n > mejorN || (n === mejorN && gp < mejorGp)) { mejorGp = gp; mejorN = n; }
+      }
+      elegido = filas.find(f => f.gp === mejorGp);
+    }
+    gps.push({
+      cn,
+      codigo_gp: elegido.gp,
+      gp_nombre: elegido.nombre,
+      es_unico:  elegido.nMiembros <= 1,
+    });
+  }
+
+  // Diagnóstico defensivo 2/2: frecuencia del caso "sin fila nacional y con más de un
+  // CODConjunto candidato" — si es habitual, la regla canónica de v1 (mayoritario, empate por
+  // menor) es una simplificación demasiado burda y hay que revisar (plan, riesgo 3).
+  if (multiplesSinNacional > 0) {
+    log.info(`[diagnóstico Publicitarios] ${multiplesSinNacional} CN con múltiples CODCCAA y sin fila nacional (CODCCAA=0) — regla canónica aplicada (GP mayoritario, empate=menor).`);
+  }
+  log.info(`Publicitarios (GP): ${gps.length} CN clasificados de ${porCn.size} candidatos tras filtro maestro`);
+
+  return gps;
 }
 
 // Nombres de lista conocidos por categoría — caso real: farmacia jose ya tenía sus listas
@@ -2501,6 +2632,7 @@ module.exports = {
   procesarVendedoresPendientes,
   verificarTablas,
   fetch4DBDescuentos,
+  fetchPublicitariosGP,
   procesarCambiosPendientes,
   procesarStockPendientes,
   procesarListaNegraPendiente,

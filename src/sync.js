@@ -411,6 +411,14 @@ async function runSync(opts = {}) {
           if (d.dto_pct > 0) { prod.dto = d.dto_pct; prod.dto_origen = '4db'; }
           prod.pvl             = d.pvl_4db || prod.pvl;
           prod.cofares_directo = d.cofares_directo;
+          // Puente de precios Publicitarios/Compras (plan Fase 3.3): dato NATIVO de Cofares,
+          // aislado a propósito de dto/pc de arriba (esos mezclan fallbacks de Excel/albarán
+          // — sirven para "el mejor dato que tenemos", no para "lo que dice Cofares
+          // literalmente", que es lo que necesita comparar el puente contra el canal directo).
+          if (d.dto_pct > 0) prod.dto_cofares = d.dto_pct;
+          if (d.cofares_directo && prod.pvl != null) {
+            prod.pc_cofares = +(prod.pvl * (1 - (d.dto_pct || 0))).toFixed(4);
+          }
           if (d.dto_pct > 0) n4db++;
         }
       }
@@ -418,6 +426,29 @@ async function runSync(opts = {}) {
     }
   } catch (e) {
     log.warn('4DB omitido:', e.message);
+  }
+
+  // Publicitarios (OTC/parafarmacia) — plan Fase 3.2: universo disjunto de Genéricos, resuelto
+  // aparte por fetchPublicitariosGP(). No bloquea el resto del sync si falla (misma política
+  // que 4DB/recepciones arriba).
+  try {
+    const gpsPublicitarios = await farmatic.fetchPublicitariosGP();
+    if (gpsPublicitarios.length > 0) {
+      const mapGP = new Map(gpsPublicitarios.map(g => [g.cn, g]));
+      let nGP = 0;
+      for (const prod of productos) {
+        const g = mapGP.get(prod.codigo_nacional);
+        if (g) {
+          prod.codigo_gp = g.codigo_gp;
+          prod.gp_nombre = g.gp_nombre;
+          prod.es_unico  = g.es_unico;
+          nGP++;
+        }
+      }
+      log.info(`✓ Publicitarios (GP): ${gpsPublicitarios.length} CN clasificados, ${nGP} casados con el catálogo leído`);
+    }
+  } catch (e) {
+    log.warn('Publicitarios (GP) omitido:', e.message);
   }
 
   // Priority 2: LineaRecep.bonificacion — last real albaran discount, for products still without dto
