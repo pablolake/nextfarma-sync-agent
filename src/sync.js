@@ -450,24 +450,34 @@ async function runSync(opts = {}) {
     const { gps: gpsPublicitarios, diagnostico } = await farmatic.fetchPublicitariosGP();
     if (!diagnostico.disponible) {
       warn(`Publicitarios (OTC): ${diagnostico.motivo} — el módulo Consejo no está disponible en esta instalación de Farmatic, no se puede detectar competencia real entre productos.`);
-    } else if (gpsPublicitarios.length === 0) {
-      const dist = diagnostico.distribucion.map(d => `${d.dispensacion ?? '(null)'}/${d.tipo ?? '(null)'}=${d.n}`).join(', ') || '(ESPEPARA vacía)';
-      warn(`Publicitarios (OTC): 0 productos clasificados — el filtro DISPENSACION='_'/TIPO='E' no encontró nada. Distribución real en ESPEPARA: ${dist}`);
     } else {
-      const mapGP = new Map(gpsPublicitarios.map(g => [g.cn, g]));
-      let nGP = 0;
-      for (const prod of productos) {
-        const g = mapGP.get(prod.codigo_nacional);
-        if (g) {
-          prod.codigo_gp = g.codigo_gp;
-          prod.gp_nombre = g.gp_nombre;
-          prod.es_unico  = g.es_unico;
-          nGP++;
-        }
+      // Antes esto era un crash silencioso (log.warn local, "Cannot read properties of
+      // undefined (reading 'gp')") que tiraba TODA la clasificación de la farmacia sin dejar
+      // rastro fuera de la máquina del cliente — ver v1.0.75. Ahora se salta solo el/los CN
+      // problemáticos (farmatic-client.js ya lo hace) y esto manda un ejemplo real para poder
+      // encontrar la causa exacta sin pedirle el log local al cliente.
+      if (diagnostico.cnsSinElegido > 0) {
+        warn(`Publicitarios (OTC): ${diagnostico.cnsSinElegido} CN no se pudieron clasificar (dato inconsistente) — ejemplo: ${JSON.stringify(diagnostico.ejemplosSinElegido[0])}`);
       }
-      ok(`Publicitarios (GP): ${gpsPublicitarios.length} CN clasificados, ${nGP} casados con el catálogo leído, ${diagnostico.gpsConCompetenciaReal} GP con competencia real (no único)`);
-      if (diagnostico.gpsConCompetenciaReal === 0) {
-        warn('Publicitarios (OTC): hay CN clasificados pero NINGUNO tiene competencia real confirmada (todos "único") — no hay favorito que optimizar todavía en ningún grupo.');
+      if (gpsPublicitarios.length === 0) {
+        const dist = diagnostico.distribucion.map(d => `${d.dispensacion ?? '(null)'}/${d.tipo ?? '(null)'}=${d.n}`).join(', ') || '(ESPEPARA vacía)';
+        warn(`Publicitarios (OTC): 0 productos clasificados — el filtro DISPENSACION='_'/TIPO='E' no encontró nada. Distribución real en ESPEPARA: ${dist}`);
+      } else {
+        const mapGP = new Map(gpsPublicitarios.map(g => [g.cn, g]));
+        let nGP = 0;
+        for (const prod of productos) {
+          const g = mapGP.get(prod.codigo_nacional);
+          if (g) {
+            prod.codigo_gp = g.codigo_gp;
+            prod.gp_nombre = g.gp_nombre;
+            prod.es_unico  = g.es_unico;
+            nGP++;
+          }
+        }
+        ok(`Publicitarios (GP): ${gpsPublicitarios.length} CN clasificados, ${nGP} casados con el catálogo leído, ${diagnostico.gpsConCompetenciaReal} GP con competencia real (no único)`);
+        if (diagnostico.gpsConCompetenciaReal === 0) {
+          warn('Publicitarios (OTC): hay CN clasificados pero NINGUNO tiene competencia real confirmada (todos "único") — no hay favorito que optimizar todavía en ningún grupo.');
+        }
       }
     }
   } catch (e) {

@@ -1176,8 +1176,15 @@ async function fetchPublicitariosGP() {
   for (const row of result.recordset) {
     const cn = String(row.cn || '').trim();
     if (!cn || !/^\d{5,}$/.test(cn)) continue;
-    const gp = row.gp != null ? Number(row.gp) : null;
-    if (gp == null) continue;
+    // Causa raíz real del crash "Cannot read properties of undefined (reading 'gp')"
+    // (farmacia jose, v1.0.73-75): BP_CONJARTI.CODConjunto/BP_CONJUNTOS.CODCONJUNTO son
+    // VARCHAR en esta instalación (confirmado por farmatic_schema_info.tablas_consejo_completo),
+    // y al menos algún valor no es puramente numérico. `Number(row.gp)` daba NaN, y
+    // `gp == null` NO detecta NaN (NaN == null es false) — ese NaN pasaba como candidato
+    // válido, y luego `filas.find(f => f.gp === mejorGp)` nunca lo encontraba (NaN === NaN
+    // es siempre false), dejando `elegido` undefined. Number.isFinite() excluye NaN también.
+    const gp = row.gp != null ? Number(row.gp) : NaN;
+    if (!Number.isFinite(gp)) continue;
     if (!porCn.has(cn)) porCn.set(cn, []);
     porCn.get(cn).push({
       gp, ccaa: Number(row.ccaa),
@@ -1187,6 +1194,8 @@ async function fetchPublicitariosGP() {
   }
 
   let multiplesSinNacional = 0;
+  let cnsSinElegido = 0;
+  const ejemplosSinElegido = [];
   const gps = [];
   for (const [cn, filas] of porCn) {
     const nacional = filas.find(f => f.ccaa === 0);
@@ -1211,6 +1220,8 @@ async function fetchPublicitariosGP() {
     // inconsistentes, etc.) un solo CN raro no debe tirar la clasificación de TODA la
     // farmacia — se salta ese CN y se sigue con el resto.
     if (!elegido) {
+      cnsSinElegido++;
+      if (ejemplosSinElegido.length < 3) ejemplosSinElegido.push({ cn, filas });
       log.warn(`[diagnóstico Publicitarios] CN ${cn}: no se pudo elegir GP (filas=${JSON.stringify(filas)}) — se omite este CN.`);
       continue;
     }
@@ -1239,6 +1250,8 @@ async function fetchPublicitariosGP() {
       filasCrudas: result.recordset.length,
       cnsClasificados: gps.length,
       gpsConCompetenciaReal: gpsUnicosConCompetencia.size,
+      cnsSinElegido,
+      ejemplosSinElegido,
     },
   };
 }
