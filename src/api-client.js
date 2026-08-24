@@ -108,6 +108,28 @@ async function enviarRecepciones(recepciones) {
   return totals;
 }
 
+// Compras agregadas por mes (sección 5 del documento de instrucciones, reconstrucción
+// histórica de favorito) — distinto de enviarRecepciones()/enviarRecepcionesDetalle()
+// (precio más reciente / detalle de 45 días): esto manda cuánto se recibió de cada CN cada
+// mes durante los últimos 24 meses, la señal de "recepción confirma" del algoritmo.
+async function enviarComprasMensuales(compras) {
+  const batchSize = parseInt(process.env.BATCH_SIZE, 10) || 500;
+  const batches    = chunk(compras, batchSize);
+  const totals     = { total: 0, upserts: 0, errors: 0 };
+  for (let i = 0; i < batches.length; i++) {
+    if (abortRequested) { log.warn(`Envío de compras mensuales cancelado (${i}/${batches.length} lotes enviados)`); throw new SyncAbortedError(); }
+    log.info(`Enviando lote compras-mensuales ${i + 1}/${batches.length} (${batches[i].length})...`);
+    try {
+      const r = await request('/api/sync/compras-mensuales', { method: 'POST', body: { compras: batches[i] } });
+      totals.total += r.total; totals.upserts += r.upserts; totals.errors += r.errors;
+    } catch (err) {
+      log.error(`Lote ${i + 1} falló:`, err.message);
+      totals.errors += batches[i].length;
+    }
+  }
+  return totals;
+}
+
 // Detalle línea a línea de recepciones (Módulo Compras, Fase 3) — distinto de
 // enviarRecepciones() (que solo manda el precio real más reciente por CN para cns.pc): esto
 // manda cada línea de albarán tal cual, para que el backend pueda cerrar automáticamente la
@@ -343,6 +365,7 @@ module.exports = {
   enviarVentas,
   enviarRecepciones,
   enviarRecepcionesDetalle,
+  enviarComprasMensuales,
   enviarFavoritos,
   enviarTopLaboratorios,
   getCambiosPendientes,

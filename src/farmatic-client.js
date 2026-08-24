@@ -961,6 +961,84 @@ async function fetchRecepcionesDetalle(diasAtras = 45) {
   return lineas;
 }
 
+// Hermana de fetchRecepcionesRecientes()/fetchRecepcionesDetalle(): aquella colapsa a una
+// fila por CN (precio más reciente) y esta manda el detalle línea a línea de los últimos 45
+// días (para cerrar fases de pedido) — ninguna de las dos sirve para saber "cuánto se recibió
+// de este CN cada mes durante los últimos 2 años", que es lo que necesita la reconstrucción
+// histórica de favorito (sección 5 del documento de instrucciones, punto 29b: "la recepción
+// confirma"). Esta función SÍ agrega por mes, igual que fetchVentasMensuales con las ventas —
+// mismo detector de columnas ya resuelto para Recep/LineaRecep, ventana por defecto de 24
+// meses (Farmatic puede no conservar tanto; si no lo tiene, simplemente salen menos filas).
+async function fetchComprasMensuales(mesesAtras = 24) {
+  const p = await getPool();
+
+  const tablas = await p.request().query(`SELECT name FROM sys.tables WHERE name IN ('Recep', 'LineaRecep')`);
+  const existe = new Set(tablas.recordset.map(r => r.name));
+  if (!existe.has('Recep') || !existe.has('LineaRecep')) {
+    log.warn('Tablas Recep/LineaRecep no encontradas (compras mensuales).');
+    return [];
+  }
+
+  const colsR = await p.request().query(
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'LineaRecep'`
+  );
+  const colsLR = new Set(colsR.recordset.map(c => String(c.COLUMN_NAME)));
+  const colCodigo = await resolverAtributoColumna({
+    entidad: 'LINEA_RECEP', atributo: 'codigo', candidatos: ['Codigo', 'IdArticu'],
+    columnasReales: colsLR, descripcion: 'Columna de LineaRecep con el código nacional o identificador del artículo recibido en cada línea de recepción/albarán.',
+  });
+  const colCantidad = await resolverAtributoColumna({
+    entidad: 'LINEA_RECEP', atributo: 'cantidad', candidatos: ['Cantidad'],
+    columnasReales: colsLR, descripcion: 'Columna de LineaRecep con la cantidad de unidades recibidas en cada línea.',
+  });
+  if (!colCodigo || !colCantidad) {
+    log.warn('LineaRecep sin columnas clave (compras mensuales)');
+    return [];
+  }
+
+  const colsR2 = await p.request().query(
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Recep'`
+  );
+  const colsRec  = new Set(colsR2.recordset.map(c => String(c.COLUMN_NAME)));
+  const colFecha = await resolverAtributoColumna({
+    entidad: 'RECEP', atributo: 'fecha', candidatos: ['FechaAlbaran', 'Fecha', 'FechaRecep'],
+    columnasReales: colsRec, descripcion: 'Columna de Recep con la fecha del albarán/recepción de mercancía.',
+  });
+  if (!colFecha) { log.warn('Recep sin columna de fecha (compras mensuales).'); return []; }
+
+  const fechaLim = new Date();
+  fechaLim.setMonth(fechaLim.getMonth() - mesesAtras);
+  const fechaISO = fechaLim.toISOString().slice(0, 10);
+
+  const result = await p.request()
+    .input('fecha', sql.Date, fechaISO)
+    .query(`
+      SELECT
+        LTRIM(RTRIM(lr.${colCodigo})) AS codigo_nacional,
+        YEAR(r.${colFecha})           AS anio,
+        MONTH(r.${colFecha})          AS mes,
+        SUM(lr.${colCantidad})        AS unidades
+      FROM LineaRecep lr
+      INNER JOIN Recep r ON lr.IdRecep = r.IdRecep
+      WHERE r.${colFecha} >= @fecha
+        AND lr.${colCantidad} > 0
+        AND lr.${colCodigo} IS NOT NULL
+      GROUP BY LTRIM(RTRIM(lr.${colCodigo})), YEAR(r.${colFecha}), MONTH(r.${colFecha})
+    `).catch(err => { log.warn('fetchComprasMensuales falló:', err.message); return { recordset: [] }; });
+
+  const anioActual = new Date().getFullYear();
+  return result.recordset.map(r => ({
+    codigo_nacional: String(r.codigo_nacional).trim(),
+    anio:            Number(r.anio),
+    mes:             Number(r.mes),
+    unidades:        Math.round(Number(r.unidades) || 0),
+  })).filter(c =>
+    c.unidades > 0 && c.mes >= 1 && c.mes <= 12 &&
+    c.anio >= 2000 && c.anio <= anioActual + 1 &&
+    /^\d{5,}$/.test(c.codigo_nacional)
+  );
+}
+
 async function verificarTablas() {
   const p   = await getPool();
   const cdb = CONSEJO_DB();
@@ -1041,6 +1119,14 @@ async function fetch4DBDescuentos() {
 // bloqueante) de ambos puntos — la primera vez que corra contra un Farmatic real hay que
 // revisar estos logs antes de confiar en el filtro/regla tal como están escritos (recordatorio
 // explícito en el plan, sección "Seguimiento inmediato").
+// Antes esta función devolvía solo el array de GP — cuando salía vacía (caso real: farmacia
+// jose, sync-agent v1.0.73, 0 filas siempre) no había forma de saber desde el panel de admin
+// SI era porque el módulo Consejo/ESPEPARA no está disponible en esa instalación de Farmatic,
+// o porque sí está pero DISPENSACION/TIPO no coincide con el filtro maestro ('_'/'E'), o si
+// simplemente no hay competencia real (todo queda "único") — las tres tienen el mismo síntoma
+// visible (grupos_publicitarios vacío) pero acciones muy distintas. Ahora se devuelve también
+// `diagnostico`, que sync.js manda como warning legible con warn() — visible en
+// last_sync_warnings_detalle sin depender de pedirle el log local al cliente.
 async function fetchPublicitariosGP() {
   const p   = await getPool();
   const cdb = CONSEJO_DB();
@@ -1051,16 +1137,18 @@ async function fetchPublicitariosGP() {
     espeparaDisponible = true;
   } catch (e) {
     log.warn(`ESPEPARA no disponible — Publicitarios (OTC) no se puede clasificar: ${e.message}`);
-    return [];
+    return { gps: [], diagnostico: { disponible: false, motivo: `ESPEPARA no disponible: ${e.message}` } };
   }
 
   // Diagnóstico defensivo 1/2: distribución real de DISPENSACION/TIPO en esta instalación.
+  let distribucion = [];
   try {
     const distR = await p.request().query(
       `SELECT DISPENSACION, TIPO, COUNT(*) AS n FROM ${cdb}.dbo.ESPEPARA GROUP BY DISPENSACION, TIPO ORDER BY n DESC`
     );
+    distribucion = distR.recordset.map(r => ({ dispensacion: r.DISPENSACION, tipo: r.TIPO, n: Number(r.n) }));
     log.info(`[diagnóstico Publicitarios] Distribución DISPENSACION/TIPO en ESPEPARA: ${
-      distR.recordset.map(r => `${JSON.stringify(r.DISPENSACION)}/${JSON.stringify(r.TIPO)}=${r.n}`).join(', ')
+      distribucion.map(r => `${JSON.stringify(r.dispensacion)}/${JSON.stringify(r.tipo)}=${r.n}`).join(', ')
     }`);
   } catch (e) {
     log.warn(`No se pudo obtener el diagnóstico de DISPENSACION/TIPO: ${e.message}`);
@@ -1131,7 +1219,17 @@ async function fetchPublicitariosGP() {
   }
   log.info(`Publicitarios (GP): ${gps.length} CN clasificados de ${porCn.size} candidatos tras filtro maestro`);
 
-  return gps;
+  const gpsUnicosConCompetencia = new Set(gps.filter(g => !g.es_unico).map(g => g.codigo_gp));
+  return {
+    gps,
+    diagnostico: {
+      disponible: true,
+      distribucion,
+      filasCrudas: result.recordset.length,
+      cnsClasificados: gps.length,
+      gpsConCompetenciaReal: gpsUnicosConCompetencia.size,
+    },
+  };
 }
 
 // Nombres de lista conocidos por categoría — caso real: farmacia jose ya tenía sus listas
@@ -2625,6 +2723,7 @@ module.exports = {
   ventanaMesesRecientes,
   fetchRecepcionesRecientes,
   fetchRecepcionesDetalle,
+  fetchComprasMensuales,
   fetchFavoritosListas,
   fetchFavoritosActuales,
   fetchTicketMedio,

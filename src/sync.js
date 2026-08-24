@@ -398,6 +398,19 @@ async function runSync(opts = {}) {
     log.warn('Recepciones (detalle) no disponibles:', e.message);
   }
 
+  // Compras agregadas por mes (sección 5 del documento de instrucciones) — alimenta la
+  // reconstrucción histórica de favorito en el backend ("la recepción confirma", punto 29b).
+  // Ventana larga (24 meses) a propósito, a diferencia de los 12/45 días de arriba.
+  let comprasMensuales = [];
+  try {
+    comprasMensuales = await farmatic.fetchComprasMensuales(24);
+    log.info(`✓ ${comprasMensuales.length} líneas de compras mensuales leídas (24 meses)`);
+    step('compras-mensuales', `Compras mensuales: ${comprasMensuales.length} líneas leídas`, 'ok');
+  } catch (e) {
+    log.warn('Compras mensuales no disponibles:', e.message);
+    step('compras-mensuales', 'Compras mensuales no disponibles', 'warn');
+  }
+
   // Priority 1: 4DB (Cofares Conecta 4D) — most accurate, normalized to decimal in farmatic-client
   let map4DB = new Map();
   try {
@@ -430,10 +443,17 @@ async function runSync(opts = {}) {
 
   // Publicitarios (OTC/parafarmacia) — plan Fase 3.2: universo disjunto de Genéricos, resuelto
   // aparte por fetchPublicitariosGP(). No bloquea el resto del sync si falla (misma política
-  // que 4DB/recepciones arriba).
+  // que 4DB/recepciones arriba). El diagnóstico se manda SIEMPRE con warn()/ok() (no solo
+  // log.info/log.warn) — caso real: farmacia jose llevaba en v1.0.73 sin ni un solo GP y
+  // era invisible desde el panel sin pedirle el log local (mismo motivo que Fase A arriba).
   try {
-    const gpsPublicitarios = await farmatic.fetchPublicitariosGP();
-    if (gpsPublicitarios.length > 0) {
+    const { gps: gpsPublicitarios, diagnostico } = await farmatic.fetchPublicitariosGP();
+    if (!diagnostico.disponible) {
+      warn(`Publicitarios (OTC): ${diagnostico.motivo} — el módulo Consejo no está disponible en esta instalación de Farmatic, no se puede detectar competencia real entre productos.`);
+    } else if (gpsPublicitarios.length === 0) {
+      const dist = diagnostico.distribucion.map(d => `${d.dispensacion ?? '(null)'}/${d.tipo ?? '(null)'}=${d.n}`).join(', ') || '(ESPEPARA vacía)';
+      warn(`Publicitarios (OTC): 0 productos clasificados — el filtro DISPENSACION='_'/TIPO='E' no encontró nada. Distribución real en ESPEPARA: ${dist}`);
+    } else {
       const mapGP = new Map(gpsPublicitarios.map(g => [g.cn, g]));
       let nGP = 0;
       for (const prod of productos) {
@@ -445,10 +465,13 @@ async function runSync(opts = {}) {
           nGP++;
         }
       }
-      log.info(`✓ Publicitarios (GP): ${gpsPublicitarios.length} CN clasificados, ${nGP} casados con el catálogo leído`);
+      ok(`Publicitarios (GP): ${gpsPublicitarios.length} CN clasificados, ${nGP} casados con el catálogo leído, ${diagnostico.gpsConCompetenciaReal} GP con competencia real (no único)`);
+      if (diagnostico.gpsConCompetenciaReal === 0) {
+        warn('Publicitarios (OTC): hay CN clasificados pero NINGUNO tiene competencia real confirmada (todos "único") — no hay favorito que optimizar todavía en ningún grupo.');
+      }
     }
   } catch (e) {
-    log.warn('Publicitarios (GP) omitido:', e.message);
+    warn('Publicitarios (GP) omitido: ' + e.message);
   }
 
   // Priority 2: LineaRecep.bonificacion — last real albaran discount, for products still without dto
@@ -598,6 +621,15 @@ async function runSync(opts = {}) {
       log.info(`✓ Recepciones (detalle): ${r.upserts} líneas procesadas`);
     } catch (e) {
       log.warn('Error enviando recepciones (detalle):', e.message);
+    }
+  }
+
+  if (comprasMensuales.length > 0) {
+    try {
+      const r = await api.enviarComprasMensuales(comprasMensuales);
+      log.info(`✓ Compras mensuales: ${r.upserts} líneas procesadas`);
+    } catch (e) {
+      log.warn('Error enviando compras mensuales:', e.message);
     }
   }
 
