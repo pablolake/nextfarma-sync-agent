@@ -1203,6 +1203,17 @@ async function fetchPublicitariosGP() {
       }
       elegido = filas.find(f => f.gp === mejorGp);
     }
+    // Salvaguarda defensiva — caso real: farmacia jose, v1.0.73/1.0.74, "Publicitarios (GP)
+    // omitido: Cannot read properties of undefined (reading 'gp')" en CADA sync, silencioso
+    // hasta que el diagnóstico empezó a mandarse como warning durable (antes solo log.warn
+    // local). No se ha podido reproducir la causa exacta sin los datos reales de Farmatic de
+    // esa instalación, pero sea cual sea (fila con ccaa no numérico, CN con filas
+    // inconsistentes, etc.) un solo CN raro no debe tirar la clasificación de TODA la
+    // farmacia — se salta ese CN y se sigue con el resto.
+    if (!elegido) {
+      log.warn(`[diagnóstico Publicitarios] CN ${cn}: no se pudo elegir GP (filas=${JSON.stringify(filas)}) — se omite este CN.`);
+      continue;
+    }
     gps.push({
       cn,
       codigo_gp: elegido.gp,
