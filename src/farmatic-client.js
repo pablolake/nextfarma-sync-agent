@@ -388,19 +388,34 @@ async function fetchProductos() {
 
   log.info(`Columnas Articu: pvl=PVP×${PVL_FACTOR} (calculado) puc=${colPuc||'—'} iva=${colIva||'—'}`);
 
-  // Proveedor no está en TABLAS_ESPERADAS (no se garantiza que exista en toda instalación,
-  // aunque fetchRecepcionesRecientes ya la usa sin comprobar) — aquí sí se comprueba antes de
-  // unirla, para no romper la lectura de TODO el catálogo si una instalación no la tiene.
-  // Da el nombre REAL del laboratorio para esa instalación concreta, en vez de depender solo
-  // del mapa fijo (LAB_MAP en el backend) que nunca puede cubrir todos los códigos posibles.
-  // IdProveedor/Nombre NO son universales — caso real Jose-2: su Proveedor tiene IDPROVEEDOR
-  // (mayúsculas, coincide igual por case-insensitive) pero el nombre está en PER_NOMBRE/
-  // FIS_NOMBRE, no en "Nombre" — un nombre de columna fijo rompió TODA la subida de catálogo
-  // (la consulta entera fallaba con "Invalid column name"), no solo el nombre del laboratorio.
+  const cdb = CONSEJO_DB();
+
+  // Nombre real del laboratorio, en vez de depender solo del mapa fijo (LAB_MAP en el
+  // backend) que nunca puede cubrir todos los códigos posibles. Dos fuentes, por este orden:
+  //   1. LABOR (BD del Consejo) — catálogo nacional código→nombre. Confirmado con datos
+  //      reales (farmacia jose, agosto 2026): Articu.Laboratorio usa códigos del catálogo
+  //      del Consejo (p.ej. "P0709"), NO el proveedor/mayorista local de Farmatic — por eso
+  //      va primero, es la fuente correcta para la inmensa mayoría de los códigos.
+  //   2. Proveedor (Farmatic local) — respaldo por si esta instalación concreta no tiene
+  //      acceso a la BD del Consejo o LABOR no cubre ese código. IdProveedor/Nombre NO son
+  //      universales — caso real Jose-2: su Proveedor tiene IDPROVEEDOR (mayúsculas, coincide
+  //      igual por case-insensitive) pero el nombre está en PER_NOMBRE/FIS_NOMBRE, no en
+  //      "Nombre" — un nombre de columna fijo rompió TODA la subida de catálogo (la consulta
+  //      entera fallaba con "Invalid column name"), no solo el nombre del laboratorio.
+  let joinLabor = '';
+  let selLabor  = 'NULL';
+  try {
+    await p.request().query(`SELECT TOP 1 1 FROM ${cdb}.dbo.LABOR`);
+    joinLabor = `LEFT JOIN ${cdb}.dbo.LABOR lab ON LTRIM(RTRIM(a.Laboratorio)) = LTRIM(RTRIM(lab.CODIGO))`;
+    selLabor  = `LTRIM(RTRIM(lab.NOMBRE))`;
+  } catch (e) {
+    log.warn(`LABOR (Consejo) no disponible para nombre de laboratorio: ${e.message}`);
+  }
+
   const tablaProveedorR = await p.request().query(`SELECT name FROM sys.tables WHERE name = 'Proveedor'`)
     .catch(() => ({ recordset: [] }));
   let joinProveedor = '';
-  let selProveedor  = `NULL AS laboratorio_nombre,`;
+  let selProveedor  = 'NULL';
   if (tablaProveedorR.recordset.length) {
     const colsProvR = await p.request().query(
       `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Proveedor'`
@@ -416,11 +431,10 @@ async function fetchProductos() {
     });
     if (colProvId && colProvNombre) {
       joinProveedor = `LEFT JOIN Proveedor prov ON LTRIM(RTRIM(a.Laboratorio)) = LTRIM(RTRIM(prov.${colProvId}))`;
-      selProveedor  = `LTRIM(RTRIM(prov.${colProvNombre})) AS laboratorio_nombre,`;
+      selProveedor  = `LTRIM(RTRIM(prov.${colProvNombre}))`;
     }
   }
-
-  const cdb = CONSEJO_DB();
+  const selLaboratorioNombre = `COALESCE(NULLIF(${selLabor}, ''), NULLIF(${selProveedor}, '')) AS laboratorio_nombre,`;
 
   // Clasificación EFG — SOLO el flag oficial, sin reglas de respaldo (decidido 31/7/2026,
   // tras confirmar dos veces con datos reales que cualquier regla de respaldo por
@@ -490,7 +504,7 @@ async function fetchProductos() {
       bpj.PVPMENOR                      AS pvp_menor,
       bpj.TIPO                          AS tipo_conjunto,
       ${selEspepara}
-      ${selProveedor}
+      ${selLaboratorioNombre}
       (
         SELECT COUNT(*)
         FROM ${cdb}.dbo.BP_CONJARTI bpc2
@@ -502,6 +516,7 @@ async function fetchProductos() {
     LEFT JOIN ${cdb}.dbo.BP_CONJUNTOS bpj
       ON bpc.CODConjunto = bpj.CODCONJUNTO AND bpj.CODCCAA = 0
     ${joinEspepara}
+    ${joinLabor}
     ${joinProveedor}
     WHERE a.Baja = 0
   `);
