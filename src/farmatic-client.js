@@ -436,6 +436,25 @@ async function fetchProductos() {
   }
   const selLaboratorioNombre = `COALESCE(NULLIF(${selLabor}, ''), NULLIF(${selProveedor}, '')) AS laboratorio_nombre,`;
 
+  // Próxima caducidad por CN — investigado 29/08/2026 (análisis de competencia, ver
+  // documento de Intelia): Articu no sirve para esto, un producto puede tener varios lotes
+  // en stock a la vez, cada uno con su propia fecha. LoteCaducidad sí es por lote (IdArticu +
+  // Lote + Stock + FCaducidad) — se agrega al mínimo FCaducidad entre los lotes que TODAVÍA
+  // tienen stock (Stock > 0): un lote ya agotado no debe marcar la fecha del producto aunque
+  // caducara antes, ya no queda nada de él que vender/priorizar.
+  let joinCaducidad = '';
+  let selCaducidad  = 'NULL';
+  try {
+    await p.request().query(`SELECT TOP 1 1 FROM LoteCaducidad`);
+    joinCaducidad = `LEFT JOIN (
+        SELECT LTRIM(RTRIM(IdArticu)) AS cn, MIN(FCaducidad) AS proxima_caducidad
+          FROM LoteCaducidad WHERE Stock > 0 GROUP BY LTRIM(RTRIM(IdArticu))
+      ) lc ON lc.cn = LTRIM(RTRIM(a.IdArticu))`;
+    selCaducidad = 'lc.proxima_caducidad';
+  } catch (e) {
+    log.warn(`LoteCaducidad no disponible para próxima caducidad: ${e.message}`);
+  }
+
   // Clasificación EFG — SOLO el flag oficial, sin reglas de respaldo (decidido 31/7/2026,
   // tras confirmar dos veces con datos reales que cualquier regla de respaldo por
   // laboratorio sobre-clasifica):
@@ -505,6 +524,7 @@ async function fetchProductos() {
       bpj.TIPO                          AS tipo_conjunto,
       ${selEspepara}
       ${selLaboratorioNombre}
+      ${selCaducidad} AS proxima_caducidad,
       (
         SELECT COUNT(*)
         FROM ${cdb}.dbo.BP_CONJARTI bpc2
@@ -518,6 +538,7 @@ async function fetchProductos() {
     ${joinEspepara}
     ${joinLabor}
     ${joinProveedor}
+    ${joinCaducidad}
     WHERE a.Baja = 0
   `);
 
@@ -598,6 +619,10 @@ async function fetchProductos() {
       nombre,
       laboratorio:      r.laboratorio ? String(r.laboratorio).trim() : null,
       laboratorio_nombre: r.laboratorio_nombre ? String(r.laboratorio_nombre).trim() : null,
+      // Caducidad más próxima entre los lotes de este CN que todavía tienen stock (ver
+      // joinCaducidad más arriba) — null si LoteCaducidad no existe en esta instalación o si
+      // el producto no tiene ningún lote con stock registrado.
+      proxima_caducidad: r.proxima_caducidad ? new Date(r.proxima_caducidad).toISOString().slice(0, 10) : null,
       principio_activo: null,
       grupo_homogeneo:  r.gh      || null,
       codigo_gh:        r.ch      || null,
