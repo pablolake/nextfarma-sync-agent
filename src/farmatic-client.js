@@ -1427,6 +1427,15 @@ const PUBLICITARIOS_COLOR_ENV = {
 // explícita del titular, no un dato derivado que haya que reconciliar cada ciclo.
 const PUBLICITARIOS_FAVORITOS_ENV = { favoritos: 'LIST_PUB_FAVORITOS' };
 
+// Lista Roja (30/08/2026) — hasta ahora LIST_NEGRA solo se podía asignar a mano en el wizard
+// a una lista YA EXISTENTE en Farmatic (nunca se autocreaba, a diferencia de categoría/color).
+// Con el nuevo esquema de 5 listas (FAVORITOS/VERDE/AMARILLO/GRIS/ROJO) para Publicitarios,
+// ROJO también debe autocrearse si falta — mismo patrón que las demás. Si una farmacia YA
+// tiene LIST_NEGRA configurada (caso real: jose, con sus propias listas), esto no toca nada
+// (asegurarListas solo crea lo que falta en el envMap, nunca reemplaza lo ya configurado).
+const LISTA_ROJA_ENV = { rojo: 'LIST_NEGRA' };
+const asegurarListaRoja = () => asegurarListas(LISTA_ROJA_ENV);
+
 // Categorías que ni la config guardada ni la detección por nombre han resuelto todavía
 // (sin env var puesta). Se usa para avisar al titular en el SaaS de que puede terminar
 // de configurar el wizard — nunca para escribir ni para bloquear el sync.
@@ -2905,6 +2914,7 @@ module.exports = {
   completarFavoritosConMasVendido,
   reconciliarColoresPublicitarios,
   sembrarFavoritosPublicitarios,
+  asegurarListaRoja,
   discoverSchema,
   discoverDataQuality,
   resetSchemaCache,

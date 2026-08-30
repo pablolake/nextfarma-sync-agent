@@ -190,36 +190,45 @@ async function reportarCoberturaCatalogo(cobertura) {
   }
 }
 
-async function getCambiosPendientes(tenantId) {
-  return request(`/api/${tenantId}/cambios-pendientes`);
+// BUG real de producción corregido 30/08/2026: estas 6 llamadas usaban /api/${tenantId}/... con
+// un tenantId que el exe NUNCA ha guardado localmente (solo el nombre de la farmacia, para
+// mostrar en pantalla — ver electron/main.js, `cfg.tenantId` no existe en ningún flujo de
+// guardado). Siempre viajaban como /api/undefined/... o /api//..., y authGate las rechazaba en
+// silencio (esperaba un tenant que no coincidía con el de la API key) — así que los cambios de
+// favorito/stock/lista roja pendientes en el SaaS NUNCA han llegado a aplicarse en Farmatic en
+// ninguna instalación real. Fix: usar /api/sync/... (el tenant se resuelve de la propia
+// X-API-Key en el backend, sin depender de nada guardado en el exe) — ya no hace falta pasar
+// tenantId en absoluto.
+async function getCambiosPendientes() {
+  return request(`/api/sync/cambios-pendientes`);
 }
 
-async function marcarCambiosProcesados(tenantId, ids) {
-  return request(`/api/${tenantId}/cambios-pendientes/procesar`, {
+async function marcarCambiosProcesados(ids) {
+  return request(`/api/sync/cambios-pendientes/procesar`, {
     method: 'POST',
     body: { ids },
   });
 }
 
-async function getListaNegraPendiente(tenantId) {
-  return request(`/api/${tenantId}/lista-negra-pendiente`);
+async function getListaNegraPendiente() {
+  return request(`/api/sync/lista-negra-pendiente`);
 }
 
 // Módulo Receta (documento de diseño v4.0, Fase 6) — mín/máx de stock que el titular ajustó
 // (o que NextFarma propuso y el titular aceptó) y que aún no se han escrito en Farmatic.
-async function getStockPendiente(tenantId) {
-  return request(`/api/${tenantId}/stock-pendiente`);
+async function getStockPendiente() {
+  return request(`/api/sync/stock-pendiente`);
 }
 
-async function marcarStockProcesado(tenantId, ids) {
-  return request(`/api/${tenantId}/stock-pendiente/procesar`, {
+async function marcarStockProcesado(ids) {
+  return request(`/api/sync/stock-pendiente/procesar`, {
     method: 'POST',
     body: { ids },
   });
 }
 
-async function marcarListaNegraProcesada(tenantId, ids) {
-  return request(`/api/${tenantId}/lista-negra-pendiente/procesar`, {
+async function marcarListaNegraProcesada(ids) {
+  return request(`/api/sync/lista-negra-pendiente/procesar`, {
     method: 'POST',
     body: { ids },
   });

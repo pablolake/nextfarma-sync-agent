@@ -94,6 +94,7 @@ async function runSync(opts = {}) {
   let listasCreadas = null; // {categoria: nuevoId} si se crearon listas de categoría este ciclo
   let listasColorCreadas = null; // {verde|amarillo|gris: nuevoId} si se crearon listas de color este ciclo
   let listasPublicitariosCreadas = null; // {favoritos|verde|amarillo|gris: nuevoId} de Publicitarios este ciclo
+  let listaRojaCreada = null; // {rojo: nuevoId} si se creó LIST_NEGRA (Lista Roja) este ciclo
   const ok   = (msg) => { resultados.ok.push(msg);    log.info('✓ ' + msg); };
   const warn = (msg) => { resultados.warn.push(msg);  log.warn('⚠ ' + msg); };
   const err  = (msg) => { resultados.error.push(msg); log.error('✗ ' + msg); };
@@ -827,36 +828,55 @@ async function runSync(opts = {}) {
     log.warn('syncEncargosVencidos omitido:', e.message);
   }
 
+  // Estas 3 colas se identifican por X-API-Key, no por un tenantId local (que el exe nunca ha
+  // guardado — ver comentario en api-client.js) — se llaman siempre, sin condición previa.
   try {
-    const tenantId = process.env.TENANT_ID;
-    if (tenantId) {
-      const { cambios } = await api.getCambiosPendientes(tenantId);
-      if (cambios && cambios.length > 0) {
-        log.info('Cambios pendientes: ' + cambios.length + ' a procesar');
-        const r = await farmatic.procesarCambiosPendientes(cambios);
-        log.info(`Cambios procesados: ${r.procesados} OK, ${r.errores} errores`);
-        if (r.ids_procesados && r.ids_procesados.length > 0) {
-          await api.marcarCambiosProcesados(tenantId, r.ids_procesados);
-        }
-      } else {
-        log.info('Sin cambios pendientes.');
+    const { cambios } = await api.getCambiosPendientes();
+    if (cambios && cambios.length > 0) {
+      log.info('Cambios pendientes: ' + cambios.length + ' a procesar');
+      const r = await farmatic.procesarCambiosPendientes(cambios);
+      log.info(`Cambios procesados: ${r.procesados} OK, ${r.errores} errores`);
+      if (r.ids_procesados && r.ids_procesados.length > 0) {
+        await api.marcarCambiosProcesados(r.ids_procesados);
       }
+    } else {
+      log.info('Sin cambios pendientes.');
     }
   } catch (e) {
     log.warn('Cambios pendientes omitidos:', e.message);
   }
 
+  // Lista Roja (30/08/2026) — LIST_NEGRA nunca se autocreaba (a diferencia de categoría/color,
+  // ver comentario junto a LISTA_ROJA_ENV en farmatic-client.js); ahora sí, con el mismo doble
+  // candado que ya protege categoría o color de Publicitarios (cualquiera de los dos habilita
+  // esto, porque LIST_NEGRA es compartida entre Receta y Publicitarios).
   try {
-    const tenantId = process.env.TENANT_ID;
-    if (tenantId) {
-      const { cambios } = await api.getListaNegraPendiente(tenantId);
-      if (cambios && cambios.length > 0) {
-        log.info('Lista Negra: ' + cambios.length + ' cambios a procesar');
-        const r = await farmatic.procesarListaNegraPendiente(cambios);
-        log.info(`Lista Negra procesada: ${r.procesados} OK, ${r.errores} errores`);
-        if (r.ids_procesados && r.ids_procesados.length > 0) {
-          await api.marcarListaNegraProcesada(tenantId, r.ids_procesados);
-        }
+    const cfgTenant = await api.obtenerConfigSync();
+    if (cfgTenant.farmatic_write_enabled && (cfgTenant.farmatic_autocrear_listas || cfgTenant.farmatic_autocrear_listas_publicitarios)) {
+      const aseguradaRoja = await farmatic.asegurarListaRoja();
+      if (aseguradaRoja?.omitida) {
+        warn('Auto-creación de la Lista Roja omitida: ' + aseguradaRoja.motivo);
+      } else if (aseguradaRoja.creadas?.length) {
+        listaRojaCreada = Object.fromEntries(aseguradaRoja.creadas.map(c => [c.categoria, c.lista_id]));
+        await api.reportarListasCreadas({ listas: aseguradaRoja.creadas, favoritos_creados: 0 });
+        ok('Lista Roja creada en Farmatic');
+        await farmatic.fetchListasWizard()
+          .then(listasActualizadas => api.enviarSchemaInfo({ listas: listasActualizadas }))
+          .catch(e => warn('No se pudo actualizar la estructura tras crear la Lista Roja: ' + e.message));
+      }
+    }
+  } catch (e) {
+    warn('Auto-creación de la Lista Roja omitida: ' + e.message);
+  }
+
+  try {
+    const { cambios } = await api.getListaNegraPendiente();
+    if (cambios && cambios.length > 0) {
+      log.info('Lista Negra: ' + cambios.length + ' cambios a procesar');
+      const r = await farmatic.procesarListaNegraPendiente(cambios);
+      log.info(`Lista Negra procesada: ${r.procesados} OK, ${r.errores} errores`);
+      if (r.ids_procesados && r.ids_procesados.length > 0) {
+        await api.marcarListaNegraProcesada(r.ids_procesados);
       }
     }
   } catch (e) {
@@ -865,16 +885,13 @@ async function runSync(opts = {}) {
 
   // Módulo Receta (Fase 6) — mín/máx de stock pendientes de escribir en Farmatic.
   try {
-    const tenantId = process.env.TENANT_ID;
-    if (tenantId) {
-      const { cambios } = await api.getStockPendiente(tenantId);
-      if (cambios && cambios.length > 0) {
-        log.info('Stock: ' + cambios.length + ' cambios a procesar');
-        const r = await farmatic.procesarStockPendientes(cambios);
-        log.info(`Stock procesado: ${r.procesados} OK, ${r.errores} errores`);
-        if (r.ids_procesados && r.ids_procesados.length > 0) {
-          await api.marcarStockProcesado(tenantId, r.ids_procesados);
-        }
+    const { cambios } = await api.getStockPendiente();
+    if (cambios && cambios.length > 0) {
+      log.info('Stock: ' + cambios.length + ' cambios a procesar');
+      const r = await farmatic.procesarStockPendientes(cambios);
+      log.info(`Stock procesado: ${r.procesados} OK, ${r.errores} errores`);
+      if (r.ids_procesados && r.ids_procesados.length > 0) {
+        await api.marcarStockProcesado(r.ids_procesados);
       }
     }
   } catch (e) {
@@ -931,7 +948,7 @@ async function runSync(opts = {}) {
 
   await sendPing(resultados.error.length > 0 ? 'error' : resultados.warn.length > 0 ? 'warn' : 'ok', elapsed)
 
-  return { ...resultados, elapsed, listasCreadas, listasColorCreadas, listasPublicitariosCreadas };
+  return { ...resultados, elapsed, listasCreadas, listasColorCreadas, listasPublicitariosCreadas, listaRojaCreada };
 }
 
 async function syncEncargos() {

@@ -102,7 +102,8 @@ async function runSyncOnce() {
     if (
       (lastSyncResults?.listasCreadas && Object.keys(lastSyncResults.listasCreadas).length) ||
       (lastSyncResults?.listasColorCreadas && Object.keys(lastSyncResults.listasColorCreadas).length) ||
-      (lastSyncResults?.listasPublicitariosCreadas && Object.keys(lastSyncResults.listasPublicitariosCreadas).length)
+      (lastSyncResults?.listasPublicitariosCreadas && Object.keys(lastSyncResults.listasPublicitariosCreadas).length) ||
+      (lastSyncResults?.listaRojaCreada && Object.keys(lastSyncResults.listaRojaCreada).length)
     ) {
       const CATEGORIA_A_CAMPO = {
         INCENTIVADOS_STAR: 'listIncentivadosStar', INCENTIVADOS: 'listIncentivados',
@@ -126,6 +127,9 @@ async function runSyncOnce() {
       }
       for (const [bucket, id] of Object.entries(lastSyncResults.listasPublicitariosCreadas || {})) {
         if (PUBLICITARIOS_A_CAMPO[bucket]) cfg.wizard[PUBLICITARIOS_A_CAMPO[bucket]] = id;
+      }
+      if (lastSyncResults.listaRojaCreada?.rojo) {
+        cfg.wizard.listNegra = lastSyncResults.listaRojaCreada.rojo;
       }
       store.set('config', cfg);
       applyConfig(cfg);
