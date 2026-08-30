@@ -49,13 +49,19 @@ function chunk(arr, size) {
 
 async function status() { return request('/api/sync/status'); }
 
-async function enviarProductos(productos) {
+async function enviarProductos(productos, onLote) {
   const batchSize = parseInt(process.env.BATCH_SIZE, 10) || 500;
   const batches   = chunk(productos, batchSize);
   const totals    = { total: 0, inserted: 0, updated: 0, errors: 0 };
   for (let i = 0; i < batches.length; i++) {
     if (abortRequested) { log.warn(`Envío de productos cancelado (${i}/${batches.length} lotes enviados)`); throw new SyncAbortedError(); }
     log.info(`Enviando lote productos ${i + 1}/${batches.length} (${batches[i].length})...`);
+    // Con catálogos grandes (varios miles de productos → decenas de lotes) este paso puede
+    // tardar varios minutos de verdad — sin este aviso por lote, desde fuera (panel admin) un
+    // catálogo simplemente grande es indistinguible de un sync realmente colgado: ambos se ven
+    // igual, "running" fijo desde el principio hasta el final (visto en producción: farma-jose,
+    // 30/08/2026 — más de 30 min en el mismo paso sin ningún dato de si avanzaba o no).
+    if (onLote) onLote(i + 1, batches.length);
     try {
       const r = await request('/api/sync/productos', { method: 'POST', body: { productos: batches[i] } });
       totals.total += r.total; totals.inserted += r.inserted;

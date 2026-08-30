@@ -630,7 +630,9 @@ async function runSync(opts = {}) {
   if (productos.length > 0) {
     step('env-cat', 'Enviando catálogo a NextFarma…', 'running');
     try {
-      const r = await api.enviarProductos(productos);
+      const r = await api.enviarProductos(productos, (lote, totalLotes) => {
+        step('env-cat', `Enviando catálogo a NextFarma… (lote ${lote}/${totalLotes})`, 'running');
+      });
       ok(`Productos: ${r.inserted} nuevos, ${r.updated} actualizados${r.errors > 0 ? `, ${r.errors} errores` : ''}`);
       if (r.errors > 0) warn(`${r.errors} productos rechazados por la API — puede haber CNs con datos incompletos`);
       step('env-cat', `Catálogo: ${r.inserted} nuevos · ${r.updated} actualizados`, r.errors > 0 ? 'warn' : 'ok');
