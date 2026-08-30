@@ -64,6 +64,13 @@ function applyConfig(cfg) {
   if (w.listColorGris)               process.env.LIST_COLOR_GRIS        = String(w.listColorGris);
   if (w.listColorNegro)              process.env.LIST_COLOR_NEGRO       = String(w.listColorNegro);
   if (w.listNegra)                   process.env.LIST_NEGRA             = String(w.listNegra);
+  // Publicitarios (30/08/2026) — igual que las de color de Receta: se autocrean y se
+  // autoguardan solas (ver el bloque de más abajo que persiste listasPublicitariosCreadas
+  // tras un sync), nunca hay un <select> en el wizard para configurarlas a mano.
+  if (w.listPubFavoritos)            process.env.LIST_PUB_FAVORITOS     = String(w.listPubFavoritos);
+  if (w.listPubVerde)                process.env.LIST_PUB_VERDE         = String(w.listPubVerde);
+  if (w.listPubAmarillo)             process.env.LIST_PUB_AMARILLO      = String(w.listPubAmarillo);
+  if (w.listPubGris)                 process.env.LIST_PUB_GRIS          = String(w.listPubGris);
   if (w.scUmbral)                    process.env.SC_UMBRAL              = String(w.scUmbral);
   if (w.opcRGPD)                     process.env.RGPD_OPCION            = String(w.opcRGPD);
   if (w.scCinfaNormon)               process.env.SC_CINFA_NORMON        = String(w.scCinfaNormon);
@@ -94,7 +101,8 @@ async function runSyncOnce() {
     // crear duplicadas (el id solo vive en process.env mientras el proceso sigue vivo).
     if (
       (lastSyncResults?.listasCreadas && Object.keys(lastSyncResults.listasCreadas).length) ||
-      (lastSyncResults?.listasColorCreadas && Object.keys(lastSyncResults.listasColorCreadas).length)
+      (lastSyncResults?.listasColorCreadas && Object.keys(lastSyncResults.listasColorCreadas).length) ||
+      (lastSyncResults?.listasPublicitariosCreadas && Object.keys(lastSyncResults.listasPublicitariosCreadas).length)
     ) {
       const CATEGORIA_A_CAMPO = {
         INCENTIVADOS_STAR: 'listIncentivadosStar', INCENTIVADOS: 'listIncentivados',
@@ -105,6 +113,9 @@ async function runSyncOnce() {
       const COLOR_A_CAMPO = {
         verde: 'listColorVerde', amarillo: 'listColorAmarillo', gris: 'listColorGris', negro: 'listColorNegro',
       };
+      const PUBLICITARIOS_A_CAMPO = {
+        favoritos: 'listPubFavoritos', verde: 'listPubVerde', amarillo: 'listPubAmarillo', gris: 'listPubGris',
+      };
       const cfg = store.get('config', {});
       cfg.wizard = cfg.wizard || {};
       for (const [categoria, id] of Object.entries(lastSyncResults.listasCreadas || {})) {
@@ -112,6 +123,9 @@ async function runSyncOnce() {
       }
       for (const [color, id] of Object.entries(lastSyncResults.listasColorCreadas || {})) {
         if (COLOR_A_CAMPO[color]) cfg.wizard[COLOR_A_CAMPO[color]] = id;
+      }
+      for (const [bucket, id] of Object.entries(lastSyncResults.listasPublicitariosCreadas || {})) {
+        if (PUBLICITARIOS_A_CAMPO[bucket]) cfg.wizard[PUBLICITARIOS_A_CAMPO[bucket]] = id;
       }
       store.set('config', cfg);
       applyConfig(cfg);

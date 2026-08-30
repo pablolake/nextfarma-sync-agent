@@ -93,6 +93,7 @@ async function runSync(opts = {}) {
   const resultados = { ok: [], warn: [], error: [] };
   let listasCreadas = null; // {categoria: nuevoId} si se crearon listas de categoría este ciclo
   let listasColorCreadas = null; // {verde|amarillo|gris: nuevoId} si se crearon listas de color este ciclo
+  let listasPublicitariosCreadas = null; // {favoritos|verde|amarillo|gris: nuevoId} de Publicitarios este ciclo
   const ok   = (msg) => { resultados.ok.push(msg);    log.info('✓ ' + msg); };
   const warn = (msg) => { resultados.warn.push(msg);  log.warn('⚠ ' + msg); };
   const err  = (msg) => { resultados.error.push(msg); log.error('✗ ' + msg); };
@@ -319,6 +320,64 @@ async function runSync(opts = {}) {
     }
   } catch (e) {
     warn('Auto-creación de listas de color omitida: ' + e.message);
+  }
+
+  // Publicitarios (30/08/2026) — FAVORITOS/VERDE/AMARILLO/GRIS, candado PROPIO
+  // (farmatic_autocrear_listas_publicitarios) distinto del de Receta: son módulos separados,
+  // se pilotan por farmacia de forma independiente. ROJO no se toca aquí — es la Lista Roja
+  // manual (LIST_NEGRA), gestionada por su propio pipeline (lista-negra-pendiente) más abajo.
+  try {
+    const cfgTenant = await api.obtenerConfigSync();
+    if (cfgTenant.farmatic_write_enabled && cfgTenant.farmatic_autocrear_listas_publicitarios) {
+      const gruposColor = await api.obtenerColoresPublicitariosActuales();
+      const resultadoFav = await farmatic.sembrarFavoritosPublicitarios(gruposColor);
+      if (resultadoFav?.omitida) {
+        warn('Auto-creación de lista FAVORITOS de Publicitarios omitida: ' + resultadoFav.motivo);
+      } else {
+        if (resultadoFav.creadas?.length) {
+          listasPublicitariosCreadas = { ...(listasPublicitariosCreadas || {}), ...Object.fromEntries(resultadoFav.creadas.map(c => [c.categoria, c.lista_id])) };
+          await api.reportarListasCreadas({ listas: resultadoFav.creadas, favoritos_creados: resultadoFav.favoritos_creados });
+          ok(`Lista FAVORITOS de Publicitarios creada en Farmatic`);
+          await farmatic.fetchListasWizard()
+            .then(listasActualizadas => api.enviarSchemaInfo({ listas: listasActualizadas }))
+            .catch(e => warn('No se pudo actualizar la estructura tras crear la lista FAVORITOS de Publicitarios: ' + e.message));
+        }
+        if (resultadoFav.favoritos_creados > 0) {
+          ok(`Favoritos de Publicitarios sembrados en Farmatic: ${resultadoFav.favoritos_creados} de ${resultadoFav.favoritos_totales}`);
+        }
+        if (resultadoFav.fallos_siembra?.length) {
+          warn(`Fallos al sembrar ${resultadoFav.fallos_siembra.length} favoritos de Publicitarios: ${resultadoFav.fallos_siembra.slice(0, 5).join('; ')}`);
+        }
+      }
+
+      const resultadoColorPub = await farmatic.reconciliarColoresPublicitarios(gruposColor);
+      if (resultadoColorPub?.omitida) {
+        warn('Auto-creación de listas de color de Publicitarios omitida: ' + resultadoColorPub.motivo);
+      } else {
+        if (resultadoColorPub.creadas?.length) {
+          listasPublicitariosCreadas = { ...(listasPublicitariosCreadas || {}), ...Object.fromEntries(resultadoColorPub.creadas.map(c => [c.categoria, c.lista_id])) };
+          await api.reportarListasCreadas({ listas: resultadoColorPub.creadas, favoritos_creados: 0 });
+          ok(`Listas de color de Publicitarios creadas en Farmatic: ${resultadoColorPub.creadas.length}`);
+          await farmatic.fetchListasWizard()
+            .then(listasActualizadas => api.enviarSchemaInfo({ listas: listasActualizadas }))
+            .catch(e => warn('No se pudo actualizar la estructura tras crear listas de color de Publicitarios: ' + e.message));
+        }
+        if (resultadoColorPub.fallos_creacion?.length) {
+          warn(`No se pudieron crear ${resultadoColorPub.fallos_creacion.length} listas de color de Publicitarios: ${resultadoColorPub.fallos_creacion.join('; ')}`);
+        }
+        if (resultadoColorPub.coloreados > 0) {
+          ok(`CN de Publicitarios coloreados en Farmatic: ${resultadoColorPub.coloreados}`);
+        }
+        if (resultadoColorPub.movidos > 0) {
+          ok(`CN de Publicitarios movidos de lista de color: ${resultadoColorPub.movidos}`);
+        }
+        if (resultadoColorPub.fallos_siembra?.length) {
+          warn(`Fallos al colorear ${resultadoColorPub.fallos_siembra.length} CN de Publicitarios: ${resultadoColorPub.fallos_siembra.slice(0, 5).join('; ')}`);
+        }
+      }
+    }
+  } catch (e) {
+    warn('Auto-creación de listas de Publicitarios omitida: ' + e.message);
   }
 
   const anioActual   = new Date().getFullYear();
@@ -872,7 +931,7 @@ async function runSync(opts = {}) {
 
   await sendPing(resultados.error.length > 0 ? 'error' : resultados.warn.length > 0 ? 'warn' : 'ok', elapsed)
 
-  return { ...resultados, elapsed, listasCreadas, listasColorCreadas };
+  return { ...resultados, elapsed, listasCreadas, listasColorCreadas, listasPublicitariosCreadas };
 }
 
 async function syncEncargos() {

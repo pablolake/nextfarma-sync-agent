@@ -1412,6 +1412,21 @@ const COLOR_ENV = {
   negro:    'LIST_COLOR_NEGRO',
 };
 
+// Publicitarios (30/08/2026) — mismo patrón que COLOR_ENV, pero SIN 'rojo': el rojo de
+// Publicitarios es la Lista Roja MANUAL (LIST_NEGRA, compartida con Receta), gestionada
+// aparte por procesarListaNegraPendiente — nunca por esta reconciliación automática, para no
+// arriesgar que se borre por error una entrada puesta a mano (ver reconciliarColoresPublicitarios).
+const PUBLICITARIOS_COLOR_ENV = {
+  verde:    'LIST_PUB_VERDE',
+  amarillo: 'LIST_PUB_AMARILLO',
+  gris:     'LIST_PUB_GRIS',
+};
+// FAVORITOS de Publicitarios — un único bucket, no varía por grupo (a diferencia de
+// CATEGORIA_ENV, que tiene 7). Mismo criterio "insertar si falta, nunca recalcular sola" que
+// las categorías de Receta (ver sembrarFavoritosEnListas): el favorito es una elección
+// explícita del titular, no un dato derivado que haya que reconciliar cada ciclo.
+const PUBLICITARIOS_FAVORITOS_ENV = { favoritos: 'LIST_PUB_FAVORITOS' };
+
 // Categorías que ni la config guardada ni la detección por nombre han resuelto todavía
 // (sin env var puesta). Se usa para avisar al titular en el SaaS de que puede terminar
 // de configurar el wizard — nunca para escribir ni para bloquear el sync.
@@ -2144,6 +2159,8 @@ async function asegurarListas(envMap) {
 }
 const asegurarListasCategoria = () => asegurarListas(CATEGORIA_ENV);
 const asegurarListasColor     = () => asegurarListas(COLOR_ENV);
+const asegurarListasColorPublicitarios = () => asegurarListas(PUBLICITARIOS_COLOR_ENV);
+const asegurarListaFavoritosPublicitarios = () => asegurarListas(PUBLICITARIOS_FAVORITOS_ENV);
 
 // Fase A — al PRINCIPIO del sync (antes de leer/subir ventas de este ciclo): asegura las
 // listas y siembra cada una SOLO con el favorito REAL ya detectado (favoritosReales, de
@@ -2286,6 +2303,84 @@ async function reconciliarFavoritosColor(coloresActuales, favoritosReales) {
     favoritos_totales: favoritosPorCh.size, favoritos_sin_lista: favoritosSinLista,
     favoritos_movidos: favoritosMovidos, fallos_siembra: fallosSiembra,
   };
+}
+
+// Publicitarios (30/08/2026) — a diferencia de Receta (reconciliarFavoritosColor: un color
+// por GH, el de su favorito), aquí CADA CN del grupo lleva su propio color (verde/amarillo/
+// gris), no solo el favorito — así el personal ve el color correcto de CUALQUIER producto que
+// mire en Farmatic, no solo el que ya está eligiendo. 'rojo' (Lista Roja manual, LIST_NEGRA)
+// se ignora aquí por completo — esa lista la gestiona solo procesarListaNegraPendiente, en su
+// propio pipeline; mezclarlas arriesgaría borrar por error una entrada puesta a mano.
+async function reconciliarColoresPublicitarios(grupos) {
+  const aseguradas = await asegurarListasColorPublicitarios();
+  if (aseguradas.omitida) return aseguradas;
+  const { creadas, fallos, listaIdPorBucket } = aseguradas;
+  const p = await getPool();
+  const todasLasListasColor = [...listaIdPorBucket.values()];
+
+  const pares = [];
+  for (const g of (grupos || [])) {
+    for (const c of (g.cns || [])) {
+      if (c.color === 'rojo') continue;
+      pares.push({ cn: c.cn, color: c.color });
+    }
+  }
+  if (!pares.length) return { creadas, fallos_creacion: fallos, coloreados: 0, movidos: 0, fallos_siembra: [] };
+
+  const itemColsR = await p.request().query(
+    `SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'ItemListaArticu'`
+  ).catch(() => ({ recordset: [] }));
+  const itemColsInfo = itemColsR.recordset;
+  const itemObligatorias = columnasObligatorias(itemColsInfo, new Set(['XItem_IdLista', 'XItem_IdArticu']));
+  const itemColumnasBase = ['XItem_IdLista', 'XItem_IdArticu', ...itemObligatorias.map(c => c.nombre)];
+  const itemValoresBase  = ['@lista', '@cn', ...itemObligatorias.map(c => c.valor)];
+
+  let coloreados = 0, movidos = 0;
+  const fallosSiembra = [];
+  for (const { cn, color } of pares) {
+    const listaId = listaIdPorBucket.get(color);
+    if (!listaId) continue;
+    const otras = todasLasListasColor.filter(id => id !== listaId);
+    if (otras.length) {
+      try {
+        const actualR = await p.request()
+          .input('cn', sql.Int, cn)
+          .query(`SELECT XItem_IdLista FROM ItemListaArticu WHERE XItem_IdArticu = @cn AND XItem_IdLista IN (${otras.join(',')})`);
+        for (const row of actualR.recordset) {
+          await p.request()
+            .input('lista', sql.Int, row.XItem_IdLista)
+            .input('cn', sql.Int, cn)
+            .query(`DELETE FROM ItemListaArticu WHERE XItem_IdLista = @lista AND XItem_IdArticu = @cn`);
+          movidos++;
+        }
+      } catch (err) {
+        log.warn(`No se pudo comprobar/mover CN ${cn} entre listas de color de Publicitarios:`, err.message);
+      }
+    }
+    const resultado = await insertarConReintentoPorColumna(
+      p, 'ItemListaArticu', itemColsInfo, itemColumnasBase, itemValoresBase,
+      [{ nombre: 'lista', tipo: sql.Int, valor: listaId }, { nombre: 'cn', tipo: sql.Int, valor: cn }],
+      { guardSql: 'IF NOT EXISTS (SELECT 1 FROM ItemListaArticu WHERE XItem_IdLista = @lista AND XItem_IdArticu = @cn) ' }
+    );
+    if (resultado.ok) coloreados++;
+    else fallosSiembra.push(`CN ${cn}: ${resultado.error}`);
+  }
+  if (creadas.length) log.info(`✓ Listas de color de Publicitarios creadas en Farmatic: ${creadas.length}`);
+  if (coloreados > 0) log.info(`✓ CN coloreados (Publicitarios): ${coloreados}`);
+  if (movidos > 0) log.info(`✓ CN movidos de lista de color (Publicitarios): ${movidos}`);
+  return { creadas, fallos_creacion: fallos, coloreados, movidos, fallos_siembra: fallosSiembra };
+}
+
+// FAVORITOS de Publicitarios — un solo bucket para todos los grupos (bucketPorChMap vacío
+// hace que sembrarFavoritosEnListas caiga siempre al bucketFallback 'favoritos'). La clave
+// no es un `ch` real, es "codconjunto:codccaa" — sembrarFavoritosEnListas es genérica, no le
+// importa qué forma tenga la clave mientras sea estable.
+function sembrarFavoritosPublicitarios(grupos) {
+  const favoritosPorGrupo = new Map();
+  for (const g of (grupos || [])) {
+    if (g.favorito_cn != null) favoritosPorGrupo.set(`${g.codconjunto}:${g.codccaa}`, g.favorito_cn);
+  }
+  return sembrarFavoritosEnListas(asegurarListaFavoritosPublicitarios, new Map(), favoritosPorGrupo, 'favoritos', 'favoritos Publicitarios');
 }
 
 // Fase B — al FINAL del sync (con las ventas de este ciclo ya subidas): para los grupos
@@ -2808,6 +2903,8 @@ module.exports = {
   sembrarFavoritosReales,
   reconciliarFavoritosColor,
   completarFavoritosConMasVendido,
+  reconciliarColoresPublicitarios,
+  sembrarFavoritosPublicitarios,
   discoverSchema,
   discoverDataQuality,
   resetSchemaCache,

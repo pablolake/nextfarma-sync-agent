@@ -278,6 +278,19 @@ async function obtenerColoresActuales() {
   }
 }
 
+// Publicitarios (30/08/2026) — devuelve grupos de equivalencia exacta con el color YA
+// calculado por CN (mapeo de escritura, distinto del semáforo on-screen — ver el comentario
+// del endpoint en nextfarma-api).
+async function obtenerColoresPublicitariosActuales() {
+  try {
+    const r = await request('/api/sync/publicitarios/colores-actuales');
+    return r.grupos || [];
+  } catch (err) {
+    log.warn('obtenerColoresPublicitariosActuales falló:', err.message);
+    return [];
+  }
+}
+
 async function reportarListasCreadas(payload) {
   try {
     return await request('/api/sync/listas-creadas', { method: 'POST', body: payload });
@@ -384,6 +397,7 @@ module.exports = {
   obtenerConfigSync,
   obtenerCategoriasActuales,
   obtenerColoresActuales,
+  obtenerColoresPublicitariosActuales,
   reportarListasCreadas,
   reportarPaso,
   reportarCategoriasSinResolver,
