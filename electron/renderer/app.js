@@ -956,3 +956,117 @@ setInterval(() => {
     }
   });
 }, 30000);
+
+/* ── Mostrador — búsqueda rápida por CN o nombre, para consultar en el momento (junto a
+   Farmatic ya abierto) qué Grupo Publicitario ocupa un producto y sus alternativas
+   ordenadas por margen, con el mismo semáforo de colores que la app web (verde = mejor
+   margen que el favorito; amarillo = el favorito, cuando no es el mejor; gris = el resto). */
+let mostradorDebounceTimer = null;
+
+function mostradorFmtEur(n) {
+  if (n === null || n === undefined) return '—';
+  return Number(n).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '€';
+}
+
+function mostradorOnInput() {
+  const q = document.getElementById('mostrador-q').value.trim();
+  clearTimeout(mostradorDebounceTimer);
+  if (q.length < 2) {
+    document.getElementById('mostrador-resultados').style.display = 'none';
+    return;
+  }
+  mostradorDebounceTimer = setTimeout(() => mostradorBuscar(q), 250);
+}
+
+async function mostradorBuscar(q) {
+  const cont = document.getElementById('mostrador-resultados');
+  cont.style.display = '';
+  cont.innerHTML = '<div class="mostrador-resultado-item">Buscando…</div>';
+  const res = await window.sync.mostradorBuscar(q);
+  // El titular pudo seguir escribiendo mientras la petición estaba en curso — no pisar un
+  // resultado más reciente con uno que llega tarde.
+  if (document.getElementById('mostrador-q').value.trim() !== q) return;
+  if (!res.ok) {
+    cont.innerHTML = `<div class="mostrador-resultado-item">${escapeHtml(res.error || 'Error al buscar')}</div>`;
+    return;
+  }
+  if (!res.resultados.length) {
+    cont.innerHTML = '<div class="mostrador-resultado-item">Sin resultados</div>';
+    return;
+  }
+  cont.innerHTML = res.resultados.map(r => `
+    <div class="mostrador-resultado-item" onmousedown="mostradorSeleccionar(${r.cn})">
+      <div class="mostrador-resultado-nombre">${escapeHtml(r.descripcion)}</div>
+      <div class="mostrador-resultado-sub">${escapeHtml(r.laboratorio || '')} · CN ${r.cn}</div>
+    </div>
+  `).join('');
+}
+
+async function mostradorSeleccionar(cn) {
+  document.getElementById('mostrador-resultados').style.display = 'none';
+  document.getElementById('mostrador-q').value = '';
+  const estado = document.getElementById('mostrador-estado');
+  const detalle = document.getElementById('mostrador-detalle');
+  estado.textContent = 'Cargando…';
+  detalle.style.display = 'none';
+  const res = await window.sync.mostradorGp(cn);
+  if (!res.ok) {
+    estado.textContent = res.error || 'Error al consultar';
+    return;
+  }
+  if (!res.gp) {
+    estado.textContent = 'Este producto no está clasificado en Publicitarios todavía.';
+    return;
+  }
+  estado.textContent = '';
+  mostradorRenderDetalle(res.gp);
+}
+
+// Mismo semáforo que lib/publicitariosColor.ts en la app web — verde = supera al favorito
+// (puede haber varios a la vez), amarillo = el favorito cuando no es el mejor, gris = el
+// resto. Sin favorito con margen conocido no se puede aplicar (sin punto de referencia).
+function mostradorColorTier(cn, cns, favoritoCn) {
+  if (cn.mu === null || cn.mu === undefined) return null;
+  const favCn = cns.find(c => c.cn === favoritoCn);
+  const muFav = favCn ? favCn.mu : null;
+  if (muFav === null || muFav === undefined) return null;
+  if (cn.cn === favoritoCn) {
+    const hayMejor = cns.some(c => c.mu !== null && c.mu !== undefined && c.mu > muFav);
+    return hayMejor ? 'amarillo' : 'verde';
+  }
+  if (cn.mu > muFav) return 'verde';
+  // Gris = mejor margen que "el más vendido" (mayor uds_ytd del grupo), no solo "el resto" —
+  // si tampoco supera eso, no lleva color (null), mismo criterio que publicitariosColor.ts.
+  let masVendido = null;
+  for (const c of cns) if (!masVendido || c.uds_ytd > masVendido.uds_ytd) masVendido = c;
+  const muMasVendido = masVendido ? masVendido.mu : null;
+  if (muMasVendido !== null && muMasVendido !== undefined && cn.mu > muMasVendido) return 'gris';
+  return null;
+}
+const MOSTRADOR_DOT_COLOR = { verde: 'var(--success)', amarillo: 'var(--warning)', gris: 'var(--muted)' };
+
+function mostradorRenderDetalle(gp) {
+  document.getElementById('mostrador-detalle').style.display = '';
+  document.getElementById('mostrador-gp-nombre').textContent = gp.nombre + (gp.es_unico ? ' (único, sin competencia)' : '');
+  const sub = [gp.familia_nombre, gp.subfamilia_nombre].filter(Boolean).join(' › ');
+  document.getElementById('mostrador-gp-sub').textContent = sub;
+  document.getElementById('mostrador-legend').style.display = gp.es_unico ? 'none' : '';
+
+  const filas = [...gp.cns].sort((a, b) => (b.mu ?? -Infinity) - (a.mu ?? -Infinity));
+  document.getElementById('mostrador-tabla-body').innerHTML = filas.map(cn => {
+    const tier = gp.es_unico ? null : mostradorColorTier(cn, gp.cns, gp.favorito_cn);
+    const esFav = cn.cn === gp.favorito_cn;
+    return `
+      <tr>
+        <td>${tier ? `<i class="mostrador-dot" style="background:${MOSTRADOR_DOT_COLOR[tier]}"></i>` : ''}</td>
+        <td>${cn.cn}</td>
+        <td>${escapeHtml(cn.descripcion)}</td>
+        <td>${escapeHtml(cn.laboratorio || '')}</td>
+        <td>${mostradorFmtEur(cn.pvp)}</td>
+        <td>${mostradorFmtEur(cn.mu)}</td>
+        <td>${cn.uds_ytd ?? 0}</td>
+        <td>${esFav ? '<span class="mostrador-badge-fav">FAVORITO</span>' : ''}</td>
+      </tr>
+    `;
+  }).join('');
+}

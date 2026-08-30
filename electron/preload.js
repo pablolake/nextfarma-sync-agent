@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('sync', {
   startSync:      ()       => ipcRenderer.invoke('start-sync'),
   stopSync:       ()       => ipcRenderer.invoke('stop-sync'),
   getStatus:        ()       => ipcRenderer.invoke('get-status'),
+  mostradorBuscar:  (q)      => ipcRenderer.invoke('mostrador-buscar', q),
+  mostradorGp:      (cn)     => ipcRenderer.invoke('mostrador-gp', cn),
   getCronicosStats: ()       => ipcRenderer.invoke('get-cronicos-stats'),
   openLogsFolder:   ()       => ipcRenderer.invoke('open-logs-folder'),
 

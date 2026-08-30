@@ -257,6 +257,35 @@ ipcMain.handle('cancel-sync', () => {
   return { ok: true };
 });
 
+// Mostrador — consulta rápida por CN o nombre de producto para el personal en el mostrador de
+// la farmacia (junto a Farmatic ya abierto), sin pasar por el navegador. Usa la MISMA
+// X-API-Key que ya tiene configurada el sync (process.env.API_KEY, puesta al arrancar la app
+// desde la config guardada) contra /api/sync/publicitarios/... en Railway — el tenant lo
+// resuelve el backend desde la propia clave, esta app nunca necesita conocer ni guardar un
+// tenantId. La renderer no puede hacer fetch directo (CSP connect-src solo permite
+// 'self'/localhost:3001), por eso pasa por IPC igual que el resto de llamadas a la API.
+ipcMain.handle('mostrador-buscar', async (_, q) => {
+  if (!process.env.API_KEY) return { ok: false, error: 'Configura primero la API Key en Configuración' };
+  try {
+    const api = require('../src/api-client');
+    const resultados = await api.request(`/api/sync/publicitarios/mostrador/buscar?q=${encodeURIComponent(q || '')}`);
+    return { ok: true, resultados };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('mostrador-gp', async (_, cn) => {
+  if (!process.env.API_KEY) return { ok: false, error: 'Configura primero la API Key en Configuración' };
+  try {
+    const api = require('../src/api-client');
+    const gps = await api.request(`/api/sync/publicitarios/gps?cn=${encodeURIComponent(cn)}`);
+    return { ok: true, gp: gps[0] || null };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 ipcMain.handle('get-status', () => ({
   isSyncing,
   lastSyncAt,

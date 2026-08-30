@@ -53,6 +53,7 @@
   <!-- TABS -->
   <nav class="tabs">
     <button class="tab active" data-tab="estado" onclick="switchTab('estado')">Estado</button>
+    <button class="tab" data-tab="mostrador" onclick="switchTab('mostrador')">Mostrador</button>
     <button class="tab" data-tab="config" onclick="switchTab('config')">Configuración</button>
     <button class="tab" data-tab="wizard" onclick="switchTab('wizard')">
       Asistente <span class="tab-badge" id="wizard-badge" style="display:none">!</span>
@@ -140,6 +141,50 @@
       <div class="sync-info" id="sync-info">
         <span id="next-sync-label"></span>
       </div>
+    </div>
+  </section>
+
+  <!-- TAB: MOSTRADOR — consulta rápida por CN o nombre: qué Grupo Publicitario ocupa un
+       producto, sus alternativas ordenadas por margen y el semáforo de colores, para usar en
+       el mostrador de la farmacia junto a Farmatic ya abierto (sin pasar por el navegador). -->
+  <section id="tab-mostrador" class="tab-content">
+    <div class="form-section">
+      <div class="form-section-title">Buscar producto</div>
+      <div class="form-hint">Escribe un CN o un nombre de producto (mínimo 2 letras).</div>
+      <div class="mostrador-search-wrap">
+        <input type="text" class="input" id="mostrador-q" placeholder="CN o nombre de producto…"
+               oninput="mostradorOnInput()" onfocus="mostradorOnInput()"
+               onblur="setTimeout(() => { document.getElementById('mostrador-resultados').style.display = 'none' }, 150)"
+               autocomplete="off">
+        <div class="mostrador-resultados" id="mostrador-resultados" style="display:none"></div>
+      </div>
+    </div>
+
+    <div id="mostrador-estado" class="form-hint" style="margin-top:8px"></div>
+
+    <div id="mostrador-detalle" class="form-section" style="display:none; margin-top:14px">
+      <div class="mostrador-gp-header">
+        <div>
+          <div class="mostrador-gp-nombre" id="mostrador-gp-nombre">—</div>
+          <div class="form-hint" id="mostrador-gp-sub" style="margin-bottom:0"></div>
+        </div>
+      </div>
+
+      <div class="mostrador-legend" id="mostrador-legend">
+        <span><i class="mostrador-dot" style="background:var(--success)"></i> mejor margen que el favorito</span>
+        <span><i class="mostrador-dot" style="background:var(--warning)"></i> el favorito, cuando no es el mejor</span>
+        <span><i class="mostrador-dot" style="background:var(--muted)"></i> mejor margen que el más vendido</span>
+        <span>sin punto = no mejora ni al favorito ni al más vendido</span>
+      </div>
+
+      <table class="mostrador-table">
+        <thead>
+          <tr>
+            <th></th><th>CN</th><th>Producto</th><th>Lab</th><th>PVP</th><th>Margen</th><th>Uds</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="mostrador-tabla-body"></tbody>
+      </table>
     </div>
   </section>
 
