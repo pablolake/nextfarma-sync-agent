@@ -1037,9 +1037,11 @@ function mostradorColorTier(cn, cns, favoritoCn) {
   if (cn.mu > muFav) return 'verde';
   // Gris = mejor margen que "el más vendido" (mayor uds_ytd del grupo), no solo "el resto" —
   // si tampoco supera eso, no lleva color (null), mismo criterio que publicitariosColor.ts.
+  // Sin ventas reales (uds_ytd=0 en todo el grupo) el "más vendido" sería arbitrario — solo
+  // cuenta como referencia si de verdad vendió algo.
   let masVendido = null;
   for (const c of cns) if (!masVendido || c.uds_ytd > masVendido.uds_ytd) masVendido = c;
-  const muMasVendido = masVendido ? masVendido.mu : null;
+  const muMasVendido = masVendido && masVendido.uds_ytd > 0 ? masVendido.mu : null;
   if (muMasVendido !== null && muMasVendido !== undefined && cn.mu > muMasVendido) return 'gris';
   return null;
 }
