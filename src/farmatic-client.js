@@ -2039,7 +2039,12 @@ async function obtenerForeignKeys(p, tabla) {
 // nombre "NextFarma - {BUCKET}" en ambos casos, así que reutilizar esto en vez de duplicar
 // la función evita que un fix (p.ej. las columnas extra de ListaArticu) se aplique a una y
 // se olvide en la otra.
-async function asegurarListas(envMap) {
+// `prefijoNombre` (opcional, default "NextFarma") — Publicitarios usa las mismas claves de
+// bucket que Receta (verde/amarillo/gris) para que el resto del código pueda buscar por el
+// color literal que manda el backend, pero eso haría que ambos auto-crearan una lista con el
+// MISMO nombre visible ("NextFarma - verde") si se dejara el prefijo fijo — confuso para el
+// titular mirando la lista de Farmatic. El prefijo distingue el nombre sin tocar las claves.
+async function asegurarListas(envMap, prefijoNombre) {
   const p = await getPool();
 
   const tblR = await p.request().query(`SELECT name FROM sys.tables WHERE name = 'ListaArticu'`)
@@ -2119,7 +2124,13 @@ async function asegurarListas(envMap) {
   const fallos = [];
   const faltantes = Object.keys(envMap).filter(bucket => !process.env[envMap[bucket]]);
   for (const bucket of faltantes) {
-    const nombreLista = `NextFarma - ${bucket}`;
+    // "NF" en vez de "NextFarma" — Nombre de ListaArticu suele ser un VARCHAR muy corto
+    // (visto en producción/test: 22 caracteres). Con el prefijo largo, "NextFarma - " (12
+    // caracteres) ya deja apenas hueco para nombres de bucket largos (INCENTIVADOS_STAR,
+    // MAX_ROTACION_A) y directamente desborda con el prefijo extra de Publicitarios
+    // ("NextFarma Publicitarios - verde" se veía en Farmatic como "NextFarma Publicitario",
+    // igual para las 4 listas, indistinguibles). "NF" dejado libre para el resto del nombre.
+    const nombreLista = `${prefijoNombre || 'NF'} - ${bucket}`;
     const nombreAjustado = (maxNombre > 0 && nombreLista.length > maxNombre)
       ? nombreLista.slice(0, maxNombre) : nombreLista;
     const columnas = [...columnasBase];
@@ -2168,8 +2179,8 @@ async function asegurarListas(envMap) {
 }
 const asegurarListasCategoria = () => asegurarListas(CATEGORIA_ENV);
 const asegurarListasColor     = () => asegurarListas(COLOR_ENV);
-const asegurarListasColorPublicitarios = () => asegurarListas(PUBLICITARIOS_COLOR_ENV);
-const asegurarListaFavoritosPublicitarios = () => asegurarListas(PUBLICITARIOS_FAVORITOS_ENV);
+const asegurarListasColorPublicitarios = () => asegurarListas(PUBLICITARIOS_COLOR_ENV, 'NF Pub');
+const asegurarListaFavoritosPublicitarios = () => asegurarListas(PUBLICITARIOS_FAVORITOS_ENV, 'NF Pub');
 
 // Fase A — al PRINCIPIO del sync (antes de leer/subir ventas de este ciclo): asegura las
 // listas y siembra cada una SOLO con el favorito REAL ya detectado (favoritosReales, de
