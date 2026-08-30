@@ -1979,19 +1979,38 @@ function columnasObligatorias(colsInfo, yaCubiertas) {
 // si vuelve a fallar (p.ej. un CHECK o FOREIGN KEY que un valor genérico no puede satisfacer),
 // se rinde y devuelve el error de SQL Server tal cual para que quede reportado.
 async function insertarConReintentoPorColumna(p, tabla, colsInfo, columnasBase, valoresBase, params, opts = {}) {
-  const { outputCol, guardSql } = opts;
+  const { outputCol, guardSql, idConocido } = opts;
   let columnas = [...columnasBase];
   let valores  = [...valoresBase];
   const yaProbadas = new Set(columnas);
+  // Si el id ya se conoce de antemano (caso IdLista NO autonumérico: se calcula a mano
+  // MAX(IdLista)+1 antes de insertar, ver asegurarListas) no hace falta pedirle nada a SQL
+  // Server tras el INSERT — ni OUTPUT ni SCOPE_IDENTITY() — se devuelve tal cual.
+  let usarOutput = !!outputCol && idConocido == null;
   for (let intento = 0; intento < 6; intento++) {
     const req = p.request();
     for (const prm of params) req.input(prm.nombre, prm.tipo, prm.valor);
+    const outputClause = usarOutput ? ` OUTPUT INSERTED.${outputCol} AS id` : '';
+    // SCOPE_IDENTITY() en la MISMA query (mismo lote/conexión) que el INSERT — una consulta
+    // aparte podría caer en otra conexión del pool y devolver el identity de otra sesión.
+    const selectIdentity = (outputCol && !usarOutput && idConocido == null) ? `; SELECT SCOPE_IDENTITY() AS id` : '';
     try {
       const r = await req.query(
-        `${guardSql || ''}INSERT INTO ${tabla} (${columnas.join(', ')})${outputCol ? ` OUTPUT INSERTED.${outputCol} AS id` : ''} VALUES (${valores.join(', ')})`
+        `${guardSql || ''}INSERT INTO ${tabla} (${columnas.join(', ')})${outputClause} VALUES (${valores.join(', ')})${selectIdentity}`
       );
-      return { ok: true, id: r.recordset?.[0]?.id };
+      if (idConocido != null) return { ok: true, id: idConocido };
+      const recordsets = r.recordsets && r.recordsets.length ? r.recordsets : [r.recordset];
+      const ultimo = recordsets[recordsets.length - 1];
+      return { ok: true, id: ultimo?.[0]?.id };
     } catch (err) {
+      // Visto en producción (jose, 30/08/2026): ListaArticu con triggers activos en esa
+      // instalación concreta — SQL Server no permite OUTPUT sin INTO si la tabla tiene
+      // triggers habilitados. Se reintenta sin OUTPUT, recuperando el id con SCOPE_IDENTITY()
+      // en su lugar (mismo intento, no cuenta como columna nueva descubierta).
+      if (usarOutput && /OUTPUT clause without INTO clause/i.test(err.message)) {
+        usarOutput = false;
+        continue;
+      }
       const colFaltante = /column '([^']+)'/i.exec(err.message)?.[1];
       const info = colFaltante && colsInfo.find(c => c.COLUMN_NAME === colFaltante);
       const valorExtra = info && valorSeguroPorTipo(info.DATA_TYPE);
@@ -2145,6 +2164,7 @@ async function asegurarListas(envMap, prefijoNombre) {
         valores.push(c.valor);
       }
     });
+    let idConocido = null;
     if (!esIdentity) {
       const siguienteR = await p.request().query(`SELECT ISNULL(MAX(IdLista), 0) + 1 AS siguiente FROM ListaArticu`)
         .catch(() => ({ recordset: [{ siguiente: null }] }));
@@ -2157,9 +2177,10 @@ async function asegurarListas(envMap, prefijoNombre) {
       columnas.push('IdLista');
       valores.push('@idlista');
       params.push({ nombre: 'idlista', tipo: sql.Int, valor: siguienteId });
+      idConocido = siguienteId;
     }
     const resultado = await insertarConReintentoPorColumna(
-      p, 'ListaArticu', colsInfo, columnas, valores, params, { outputCol: 'IdLista' }
+      p, 'ListaArticu', colsInfo, columnas, valores, params, { outputCol: 'IdLista', idConocido }
     );
     if (resultado.ok && resultado.id) {
       creadas.push({ categoria: bucket, lista_id: resultado.id });
