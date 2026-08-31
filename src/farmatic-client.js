@@ -2426,14 +2426,18 @@ async function reconciliarColoresPublicitarios(grupos) {
   let coloreados = 0, movidos = 0;
   const fallosSiembra = [];
   for (const { cn, color } of pares) {
-    const listaId = listaIdPorBucket.get(color);
-    if (!listaId) continue;
-    const otras = todasLasListasColor.filter(id => id !== listaId);
-    if (otras.length) {
+    // color puede venir null desde el 31/08/2026 (regla nueva del semáforo: ni top-2 ni supera
+    // al favorito → sin color, ni siquiera "gris" como antes). Antes esto se saltaba entero
+    // (`if (!listaId) continue`) y un CN que dejaba de tener color se quedaba PEGADO para
+    // siempre en la lista donde estuviera (nunca se volvía a tocar) — ahora, sin color, se
+    // saca de TODAS las listas de color en vez de dejarlo intacto.
+    const listaId = color != null ? listaIdPorBucket.get(color) : null;
+    const listasAQuitar = listaId ? todasLasListasColor.filter(id => id !== listaId) : todasLasListasColor;
+    if (listasAQuitar.length) {
       try {
         const actualR = await p.request()
           .input('cn', sql.Int, cn)
-          .query(`SELECT XItem_IdLista FROM ItemListaArticu WHERE XItem_IdArticu = @cn AND XItem_IdLista IN (${otras.join(',')})`);
+          .query(`SELECT XItem_IdLista FROM ItemListaArticu WHERE XItem_IdArticu = @cn AND XItem_IdLista IN (${listasAQuitar.join(',')})`);
         for (const row of actualR.recordset) {
           await p.request()
             .input('lista', sql.Int, row.XItem_IdLista)
@@ -2445,6 +2449,7 @@ async function reconciliarColoresPublicitarios(grupos) {
         log.warn(`No se pudo comprobar/mover CN ${cn} entre listas de color de Publicitarios:`, err.message);
       }
     }
+    if (!listaId) continue; // sin color → ya sacado de todas arriba, nada que insertar
     const resultado = await insertarConReintentoPorColumna(
       p, 'ItemListaArticu', itemColsInfo, itemColumnasBase, itemValoresBase,
       [{ nombre: 'lista', tipo: sql.Int, valor: listaId }, { nombre: 'cn', tipo: sql.Int, valor: cn }],
