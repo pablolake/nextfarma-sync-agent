@@ -2433,6 +2433,7 @@ async function reconciliarColoresPublicitarios(grupos) {
     // saca de TODAS las listas de color en vez de dejarlo intacto.
     const listaId = color != null ? listaIdPorBucket.get(color) : null;
     const listasAQuitar = listaId ? todasLasListasColor.filter(id => id !== listaId) : todasLasListasColor;
+    let quitadoOk = true;
     if (listasAQuitar.length) {
       try {
         const actualR = await p.request()
@@ -2446,9 +2447,16 @@ async function reconciliarColoresPublicitarios(grupos) {
           movidos++;
         }
       } catch (err) {
-        log.warn(`No se pudo comprobar/mover CN ${cn} entre listas de color de Publicitarios:`, err.message);
+        // Si falla el borrado, NO seguimos a insertar en la lista nueva — antes se hacía igual
+        // (solo log.warn y continuar), arriesgando dejar el CN en dos listas de color a la vez
+        // si esto fallaba justo antes de un color distinto al de la sincronización anterior.
+        // Sin confirmar que se quitó de la vieja, mejor no tocar nada este sync y reintentar
+        // en el siguiente en vez de arriesgar el duplicado.
+        quitadoOk = false;
+        log.warn(`No se pudo comprobar/mover CN ${cn} entre listas de color de Publicitarios (no se reasigna en este sync):`, err.message);
       }
     }
+    if (!quitadoOk) { fallosSiembra.push(`CN ${cn}: fallo al quitar de listas anteriores`); continue; }
     if (!listaId) continue; // sin color → ya sacado de todas arriba, nada que insertar
     const resultado = await insertarConReintentoPorColumna(
       p, 'ItemListaArticu', itemColsInfo, itemColumnasBase, itemValoresBase,
