@@ -1022,27 +1022,21 @@ async function mostradorSeleccionar(cn) {
   mostradorRenderDetalle(res.gp);
 }
 
-// Mismo semáforo que lib/publicitariosColor.ts en la app web — verde = supera al favorito
-// (puede haber varios a la vez), amarillo = el favorito cuando no es el mejor, gris = el
-// resto. Sin favorito con margen conocido no se puede aplicar (sin punto de referencia).
+// Mismo semáforo que lib/publicitariosColor.ts en la app web (31/08/2026, regla del titular):
+// verde = mejor margen del grupo, amarillo = 2º mejor margen, gris = cualquier otro con más
+// margen que el favorito (a partir del 3er puesto). El favorito ya no es el punto de partida
+// del semáforo, solo la referencia para "gris" — su propio badge FAVORITO ya lo señala aparte.
 function mostradorColorTier(cn, cns, favoritoCn) {
   if (cn.mu === null || cn.mu === undefined) return null;
+  const ordenados = cns
+    .filter(c => c.mu !== null && c.mu !== undefined)
+    .sort((a, b) => (b.mu - a.mu) || (b.uds_ytd - a.uds_ytd) || (a.cn - b.cn));
+  const rank = ordenados.findIndex(c => c.cn === cn.cn);
+  if (rank === 0) return 'verde';
+  if (rank === 1) return 'amarillo';
   const favCn = cns.find(c => c.cn === favoritoCn);
   const muFav = favCn ? favCn.mu : null;
-  if (muFav === null || muFav === undefined) return null;
-  if (cn.cn === favoritoCn) {
-    const hayMejor = cns.some(c => c.mu !== null && c.mu !== undefined && c.mu > muFav);
-    return hayMejor ? 'amarillo' : 'verde';
-  }
-  if (cn.mu > muFav) return 'verde';
-  // Gris = mejor margen que "el más vendido" (mayor uds_ytd del grupo), no solo "el resto" —
-  // si tampoco supera eso, no lleva color (null), mismo criterio que publicitariosColor.ts.
-  // Sin ventas reales (uds_ytd=0 en todo el grupo) el "más vendido" sería arbitrario — solo
-  // cuenta como referencia si de verdad vendió algo.
-  let masVendido = null;
-  for (const c of cns) if (!masVendido || c.uds_ytd > masVendido.uds_ytd) masVendido = c;
-  const muMasVendido = masVendido && masVendido.uds_ytd > 0 ? masVendido.mu : null;
-  if (muMasVendido !== null && muMasVendido !== undefined && cn.mu > muMasVendido) return 'gris';
+  if (muFav !== null && muFav !== undefined && cn.mu > muFav) return 'gris';
   return null;
 }
 const MOSTRADOR_DOT_COLOR = { verde: 'var(--success)', amarillo: 'var(--warning)', gris: 'var(--muted)' };
