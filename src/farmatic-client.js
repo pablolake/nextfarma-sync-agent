@@ -2203,6 +2203,53 @@ const asegurarListasColor     = () => asegurarListas(COLOR_ENV);
 const asegurarListasColorPublicitarios = () => asegurarListas(PUBLICITARIOS_COLOR_ENV, 'NF Pub');
 const asegurarListaFavoritosPublicitarios = () => asegurarListas(PUBLICITARIOS_FAVORITOS_ENV, 'NF Pub');
 
+// Homologación de nombres (31/08/2026) — acción explícita, gated por su propio candado
+// (farmatic_homologar_nombres_listas), NUNCA automática por defecto: farmacias que ya usaban
+// el auto-creador desde antes del acortado de prefijos (ver asegurarListas más arriba) se
+// quedaron con listas "NextFarma - X" en vez de "NF - X" (caso real: jose-2). Solo renombra
+// listas YA configuradas (su variable LIST_* apunta a un IdLista real) — nunca crea ni borra
+// nada, así que es seguro repetirlo en cada ciclo (si el nombre ya coincide, no toca la fila).
+// Deliberadamente NO incluye LISTA_ROJA_ENV: esa lista suele ser una que la propia farmacia ya
+// tenía con su propio nombre antes de que existiera este módulo (ver reconciliarColoresPublicitarios) —
+// renombrarla sería tocar algo que el titular reconoce por su nombre, no una lista nuestra.
+async function homologarNombresListas(envMap, prefijoNombre) {
+  const p = await getPool();
+  const colsR = await p.request().query(
+    `SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'ListaArticu'`
+  ).catch(() => ({ recordset: [] }));
+  const cols = new Set(colsR.recordset.map(r => String(r.COLUMN_NAME)));
+  const colNombre = await resolverAtributoColumna({
+    entidad: 'LISTA_ARTICU', atributo: 'nombre', candidatos: ['Nombre', 'Descripcion'],
+    columnasReales: cols, descripcion: 'Columna de ListaArticu con el nombre/descripción visible de cada lista de artículos.',
+  });
+  if (!colNombre) return { omitida: true, motivo: 'ListaArticu no tiene columna Nombre/Descripcion reconocible' };
+  const maxNombre = colsR.recordset.find(c => c.COLUMN_NAME === colNombre)?.CHARACTER_MAXIMUM_LENGTH;
+
+  let renombradas = 0;
+  const fallos = [];
+  for (const [bucket, envKey] of Object.entries(envMap)) {
+    const id = parseInt(process.env[envKey], 10);
+    if (!id) continue; // no configurada todavía — nada que homologar
+    const nombreCanonico = `${prefijoNombre || 'NF'} - ${bucket}`;
+    const nombreAjustado = (maxNombre > 0 && nombreCanonico.length > maxNombre)
+      ? nombreCanonico.slice(0, maxNombre) : nombreCanonico;
+    try {
+      const actualR = await p.request().input('id', sql.Int, id).query(`SELECT ${colNombre} AS nombre FROM ListaArticu WHERE IdLista = @id`);
+      const nombreActual = actualR.recordset[0]?.nombre;
+      if (nombreActual == null) continue; // la lista ya no existe en Farmatic — no recrear aquí
+      if (nombreActual === nombreAjustado) continue; // ya homologada
+      await p.request().input('id', sql.Int, id).input('nombre', sql.VarChar, nombreAjustado)
+        .query(`UPDATE ListaArticu SET ${colNombre} = @nombre WHERE IdLista = @id`);
+      renombradas++;
+    } catch (err) {
+      fallos.push(`${bucket}: ${err.message}`);
+    }
+  }
+  return { renombradas, fallos };
+}
+const homologarNombresListasCategoria = () => homologarNombresListas(CATEGORIA_ENV);
+const homologarNombresListasColor     = () => homologarNombresListas(COLOR_ENV);
+
 // Fase A — al PRINCIPIO del sync (antes de leer/subir ventas de este ciclo): asegura las
 // listas y siembra cada una SOLO con el favorito REAL ya detectado (favoritosReales, de
 // fetchFavoritosActuales) — es la elección de verdad del titular, nunca "más vendido"
@@ -2947,6 +2994,8 @@ module.exports = {
   reconciliarColoresPublicitarios,
   sembrarFavoritosPublicitarios,
   asegurarListaRoja,
+  homologarNombresListasCategoria,
+  homologarNombresListasColor,
   discoverSchema,
   discoverDataQuality,
   resetSchemaCache,

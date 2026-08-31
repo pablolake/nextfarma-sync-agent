@@ -323,6 +323,34 @@ async function runSync(opts = {}) {
     warn('Auto-creación de listas de color omitida: ' + e.message);
   }
 
+  // Homologación de nombres (31/08/2026) — candado PROPIO (farmatic_homologar_nombres_listas),
+  // acción explícita por farmacia, nunca automática: renombra "NextFarma - X" → "NF - X" en
+  // instalaciones que ya venían usando el auto-creador desde antes del acortado de prefijos
+  // (caso real: jose-2). Solo toca listas YA configuradas — nunca crea ni borra nada, así que
+  // es seguro dejarlo corriendo en cada ciclo (si ya está homologada, no hace ningún UPDATE).
+  try {
+    const cfgTenant = await api.obtenerConfigSync();
+    if (cfgTenant.farmatic_write_enabled && cfgTenant.farmatic_homologar_nombres_listas) {
+      const [resultadoCat, resultadoCol] = await Promise.all([
+        farmatic.homologarNombresListasCategoria(),
+        farmatic.homologarNombresListasColor(),
+      ]);
+      const totalRenombradas = (resultadoCat?.renombradas || 0) + (resultadoCol?.renombradas || 0);
+      if (totalRenombradas > 0) {
+        ok(`Listas renombradas al formato homologado: ${totalRenombradas}`);
+        await farmatic.fetchListasWizard()
+          .then(listasActualizadas => api.enviarSchemaInfo({ listas: listasActualizadas }))
+          .catch(e => warn('No se pudo actualizar la estructura tras homologar nombres: ' + e.message));
+      }
+      const fallosHomologar = [...(resultadoCat?.fallos || []), ...(resultadoCol?.fallos || [])];
+      if (fallosHomologar.length) {
+        warn(`No se pudieron renombrar ${fallosHomologar.length} listas: ${fallosHomologar.slice(0, 5).join('; ')}`);
+      }
+    }
+  } catch (e) {
+    warn('Homologación de nombres de listas omitida: ' + e.message);
+  }
+
   // Publicitarios (30/08/2026) — FAVORITOS/VERDE/AMARILLO/GRIS, candado PROPIO
   // (farmatic_autocrear_listas_publicitarios) distinto del de Receta: son módulos separados,
   // se pilotan por farmacia de forma independiente. ROJO no se toca aquí — es la Lista Roja
