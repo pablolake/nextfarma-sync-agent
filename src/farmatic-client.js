@@ -2433,38 +2433,43 @@ async function reconciliarColoresPublicitarios(grupos) {
     // saca de TODAS las listas de color en vez de dejarlo intacto.
     const listaId = color != null ? listaIdPorBucket.get(color) : null;
     const listasAQuitar = listaId ? todasLasListasColor.filter(id => id !== listaId) : todasLasListasColor;
-    let quitadoOk = true;
-    if (listasAQuitar.length) {
-      try {
-        const actualR = await p.request()
+    if (!listasAQuitar.length && !listaId) continue; // nada que hacer para este CN
+
+    // Borrado e inserción en una única transacción (mismo motivo que procesarCambiosPendientes,
+    // ver ahí): antes eran pasos sueltos y un fallo justo entre medias dejaba el CN sin ningún
+    // color asignado, o en dos listas a la vez, hasta el siguiente sync.
+    const tx = new sql.Transaction(p);
+    await tx.begin();
+    try {
+      let movidosCn = 0;
+      if (listasAQuitar.length) {
+        const actualR = await tx.request()
           .input('cn', sql.Int, cn)
           .query(`SELECT XItem_IdLista FROM ItemListaArticu WHERE XItem_IdArticu = @cn AND XItem_IdLista IN (${listasAQuitar.join(',')})`);
         for (const row of actualR.recordset) {
-          await p.request()
+          await tx.request()
             .input('lista', sql.Int, row.XItem_IdLista)
             .input('cn', sql.Int, cn)
             .query(`DELETE FROM ItemListaArticu WHERE XItem_IdLista = @lista AND XItem_IdArticu = @cn`);
-          movidos++;
+          movidosCn++;
         }
-      } catch (err) {
-        // Si falla el borrado, NO seguimos a insertar en la lista nueva — antes se hacía igual
-        // (solo log.warn y continuar), arriesgando dejar el CN en dos listas de color a la vez
-        // si esto fallaba justo antes de un color distinto al de la sincronización anterior.
-        // Sin confirmar que se quitó de la vieja, mejor no tocar nada este sync y reintentar
-        // en el siguiente en vez de arriesgar el duplicado.
-        quitadoOk = false;
-        log.warn(`No se pudo comprobar/mover CN ${cn} entre listas de color de Publicitarios (no se reasigna en este sync):`, err.message);
       }
+      if (listaId) {
+        const resultado = await insertarConReintentoPorColumna(
+          tx, 'ItemListaArticu', itemColsInfo, itemColumnasBase, itemValoresBase,
+          [{ nombre: 'lista', tipo: sql.Int, valor: listaId }, { nombre: 'cn', tipo: sql.Int, valor: cn }],
+          { guardSql: 'IF NOT EXISTS (SELECT 1 FROM ItemListaArticu WHERE XItem_IdLista = @lista AND XItem_IdArticu = @cn) ' }
+        );
+        if (!resultado.ok) throw new Error(resultado.error);
+      }
+      await tx.commit();
+      movidos += movidosCn;
+      if (listaId) coloreados++;
+    } catch (err) {
+      await tx.rollback().catch(() => {});
+      log.warn(`No se pudo recolorear CN ${cn} en Publicitarios (revertido, se reintenta en el siguiente sync):`, err.message);
+      fallosSiembra.push(`CN ${cn}: ${err.message}`);
     }
-    if (!quitadoOk) { fallosSiembra.push(`CN ${cn}: fallo al quitar de listas anteriores`); continue; }
-    if (!listaId) continue; // sin color → ya sacado de todas arriba, nada que insertar
-    const resultado = await insertarConReintentoPorColumna(
-      p, 'ItemListaArticu', itemColsInfo, itemColumnasBase, itemValoresBase,
-      [{ nombre: 'lista', tipo: sql.Int, valor: listaId }, { nombre: 'cn', tipo: sql.Int, valor: cn }],
-      { guardSql: 'IF NOT EXISTS (SELECT 1 FROM ItemListaArticu WHERE XItem_IdLista = @lista AND XItem_IdArticu = @cn) ' }
-    );
-    if (resultado.ok) coloreados++;
-    else fallosSiembra.push(`CN ${cn}: ${resultado.error}`);
   }
   if (creadas.length) log.info(`✓ Listas de color de Publicitarios creadas en Farmatic: ${creadas.length}`);
   if (coloreados > 0) log.info(`✓ CN coloreados (Publicitarios): ${coloreados}`);
@@ -2607,27 +2612,42 @@ async function procesarCambiosPendientes(cambios) {
 
       const listaIds = Object.values(listas).join(',');
 
-      if (favorito_cn_anterior) {
-        await p.request()
-          .input('cn', sql.Int, favorito_cn_anterior)
-          .query(`
-            DELETE FROM ItemListaArticu
-            WHERE XItem_IdArticu = @cn
-              AND XItem_IdLista IN (${listaIds})
-          `);
-      }
+      // Borrado (de la lista vieja) e inserción (en la nueva) en una única transacción SQL —
+      // antes eran dos awaits sueltos: si el DELETE tenía éxito pero el INSERT fallaba después
+      // (constraint, CN inválido…), el catch de abajo solo contaba error y seguía, dejando el
+      // CN fuera de TODAS las listas de categoría hasta el siguiente sync. Con transacción, un
+      // fallo en cualquiera de los dos pasos deshace también el otro — el CN se queda donde ya
+      // estaba, nunca a medias.
+      const tx = new sql.Transaction(p);
+      await tx.begin();
+      try {
+        if (favorito_cn_anterior) {
+          await new sql.Request(tx)
+            .input('cn', sql.Int, favorito_cn_anterior)
+            .query(`
+              DELETE FROM ItemListaArticu
+              WHERE XItem_IdArticu = @cn
+                AND XItem_IdLista IN (${listaIds})
+            `);
+        }
 
-      await p.request()
-        .input('lista', sql.Int, listaDestino)
-        .input('cn',    sql.Int, favorito_cn_nuevo)
-        .query(`
-          IF NOT EXISTS (
-            SELECT 1 FROM ItemListaArticu
-            WHERE XItem_IdLista = @lista AND XItem_IdArticu = @cn
-          )
-          INSERT INTO ItemListaArticu (XItem_IdLista, XItem_IdArticu)
-          VALUES (@lista, @cn)
-        `);
+        await new sql.Request(tx)
+          .input('lista', sql.Int, listaDestino)
+          .input('cn',    sql.Int, favorito_cn_nuevo)
+          .query(`
+            IF NOT EXISTS (
+              SELECT 1 FROM ItemListaArticu
+              WHERE XItem_IdLista = @lista AND XItem_IdArticu = @cn
+            )
+            INSERT INTO ItemListaArticu (XItem_IdLista, XItem_IdArticu)
+            VALUES (@lista, @cn)
+          `);
+
+        await tx.commit();
+      } catch (errTx) {
+        await tx.rollback().catch(() => {});
+        throw errTx;
+      }
 
       log.info(`Cambio procesado: CH ${ch} CN ${favorito_cn_nuevo} lista ${listaDestino} (${categoria_nueva})`);
       procesados++;
