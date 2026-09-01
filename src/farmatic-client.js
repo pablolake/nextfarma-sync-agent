@@ -2575,8 +2575,13 @@ async function procesarCambiosPendientes(cambios) {
   if (!cambios || cambios.length === 0) return { procesados: 0, errores: 0, ids_procesados: [] };
   const listas = getCategoriaLista();
   if (!listas) {
+    // sinListas:true (01/09/2026) — antes esto era un log.warn puramente local: el servidor
+    // ya había marcado estas filas 'aplicando' (ver getCambiosPendientes) así que se quedaban
+    // colgadas sin que nadie en NextFarma viera POR QUÉ. Caso real: farmacia Jose, 0 cambios
+    // aplicados en su historial completo pese a varios ciclos — este aviso es lo que lo habría
+    // dejado ver desde el primer ciclo en vez de tener que deducirlo desde fuera.
     log.warn('procesarCambiosPendientes omitido: completa el wizard (paso Listas) para activar escritura en Farmatic');
-    return { procesados: 0, errores: 0, ids_procesados: [] };
+    return { procesados: 0, errores: 0, ids_procesados: [], sinListas: true };
   }
   const p = await getPool();
   let procesados = 0, errores = 0;

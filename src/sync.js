@@ -869,6 +869,15 @@ async function runSync(opts = {}) {
       if (r.ids_procesados && r.ids_procesados.length > 0) {
         await api.marcarCambiosProcesados(r.ids_procesados);
       }
+      // El servidor ya marcó estos `cambios.length` como 'aplicando' al entregarlos — si aquí
+      // no se confirma ninguno, se quedan colgados hasta el timeout de 30 min sin que nadie
+      // sepa por qué. Que quede en el resumen del sync (warnings_detalle del ping), no solo en
+      // el log local del PC de la farmacia.
+      if (r.sinListas) {
+        warn(`${cambios.length} cambio(s) de favorito/categoría pendientes sin aplicar: falta completar el Asistente (paso Listas) para activar la escritura en Farmatic`);
+      } else if (r.procesados === 0 && (!r.ids_procesados || r.ids_procesados.length === 0)) {
+        warn(`${cambios.length} cambio(s) de favorito/categoría pendientes no se aplicaron esta vez (${r.errores} error(es))`);
+      }
     } else {
       log.info('Sin cambios pendientes.');
     }
