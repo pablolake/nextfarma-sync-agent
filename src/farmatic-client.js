@@ -1001,6 +1001,196 @@ async function fetchRecepcionesDetalle(diasAtras = 45) {
   return lineas;
 }
 
+// Predictor de descuentos (Publicitarios, pedido directo a laboratorio) — Fase 1, 02/09/2026.
+// Hermana de fetchRecepcionesDetalle(), mismo join base LineaRecep+Recep ya probado en
+// producción (lr.IdRecep = r.IdRecep — NO el XRecep_IdRecep que usa el diagnóstico
+// 'recepciones_recientes', ese no está verificado contra ninguna instalación real). Añade tres
+// cosas nuevas que fetchRecepcionesDetalle no necesita: el importe CON impuestos (ImportePuc,
+// para poder reconstruir el PUC neto vía Piva/PReq), el proveedor real de la recepción (para
+// filtrar cooperativa vs directo, servidor decide con qué patrones) y el tipo de IVA/RE del
+// artículo (Articu → Grupoiva → Tablaiva, join sin precedente en este fichero — ver
+// comentario de riesgo en el plan: cuál de IdTipoArt/IdTipoCli/IdTipoPro es el correcto no se
+// puede confirmar sin ver el esquema real de una instalación, así que si algo no resuelve se
+// manda null y el servidor descarta esa línea del cálculo en vez de arriesgar un dato
+// contaminado (mismo criterio que ya costó caro con "pvl", ver comentario más arriba).
+async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
+  const p = await getPool();
+
+  const tablas = await p.request().query(`SELECT name FROM sys.tables WHERE name IN ('Recep', 'LineaRecep')`);
+  const existe = new Set(tablas.recordset.map(r => r.name));
+  if (!existe.has('Recep') || !existe.has('LineaRecep')) {
+    log.info('fetchRecepcionesDescuentoReal omitido: Recep/LineaRecep no encontradas.');
+    return [];
+  }
+
+  const colsLR = new Set((await p.request().query(
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'LineaRecep'`
+  )).recordset.map(c => String(c.COLUMN_NAME)));
+  const colCodigo = await resolverAtributoColumna({
+    entidad: 'LINEA_RECEP', atributo: 'codigo', candidatos: ['Codigo', 'IdArticu'],
+    columnasReales: colsLR, descripcion: 'Columna de LineaRecep con el código nacional del artículo recibido.',
+  });
+  const colCantidad = await resolverAtributoColumna({
+    entidad: 'LINEA_RECEP', atributo: 'cantidad', candidatos: ['Cantidad'],
+    columnasReales: colsLR, descripcion: 'Columna de LineaRecep con la cantidad de unidades recibidas en cada línea.',
+  });
+  const colImportePuc = await resolverAtributoColumna({
+    entidad: 'LINEA_RECEP', atributo: 'importe_puc', candidatos: ['ImportePuc', 'ImporteLinea', 'PrecioConIva'],
+    columnasReales: colsLR,
+    descripcion: 'Columna de LineaRecep con el importe CON impuestos (IVA y recargo de equivalencia incluidos) de esa línea de recepción — precio de compra real pagado, no el neto sin impuestos.',
+  });
+  if (!colCodigo || !colCantidad || !colImportePuc) {
+    log.warn('fetchRecepcionesDescuentoReal: LineaRecep sin columnas clave (falta importe con impuestos).');
+    return [];
+  }
+
+  const colsRec = new Set((await p.request().query(
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Recep'`
+  )).recordset.map(c => String(c.COLUMN_NAME)));
+  const colFecha = await resolverAtributoColumna({
+    entidad: 'RECEP', atributo: 'fecha', candidatos: ['FechaAlbaran', 'Fecha', 'FechaRecep'],
+    columnasReales: colsRec, descripcion: 'Columna de Recep con la fecha del albarán/recepción de mercancía.',
+  });
+  const colProvIdRecep = await resolverAtributoColumna({
+    entidad: 'RECEP', atributo: 'proveedor_id', candidatos: ['XProv_IdProveedor', 'IdProveedor'],
+    columnasReales: colsRec, descripcion: 'Columna de Recep con el código del proveedor/distribuidor real de esa recepción (quien vendió la mercancía, puede ser una cooperativa como Cofares o el propio laboratorio).',
+  });
+  if (!colFecha) { log.warn('fetchRecepcionesDescuentoReal: Recep sin columna de fecha.'); return []; }
+
+  // Proveedor: mismas columnas que ya resuelve fetchProductos() para laboratorio_nombre
+  // (entidad 'PROVEEDOR') — si ya se resolvió en este mismo sync, esto es un hit de caché.
+  let joinProveedor = '', selProveedorNombre = 'NULL';
+  if (colProvIdRecep) {
+    const tablaProvR = await p.request().query(`SELECT name FROM sys.tables WHERE name = 'Proveedor'`)
+      .catch(() => ({ recordset: [] }));
+    if (tablaProvR.recordset.length) {
+      const colsProv = new Set((await p.request().query(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Proveedor'`
+      )).recordset.map(c => String(c.COLUMN_NAME)));
+      const colProvId = await resolverAtributoColumna({
+        entidad: 'PROVEEDOR', atributo: 'id', candidatos: ['IdProveedor', 'IDPROVEEDOR'],
+        columnasReales: colsProv, descripcion: 'Columna de Proveedor con el código de proveedor.',
+      });
+      const colProvNombre = await resolverAtributoColumna({
+        entidad: 'PROVEEDOR', atributo: 'nombre', candidatos: ['Nombre', 'PER_NOMBRE', 'FIS_NOMBRE'],
+        columnasReales: colsProv, descripcion: 'Columna de Proveedor con el nombre visible del proveedor/distribuidor.',
+      });
+      if (colProvId && colProvNombre) {
+        joinProveedor = `LEFT JOIN Proveedor prov ON prov.${colProvId} = r.${colProvIdRecep}`;
+        selProveedorNombre = `LTRIM(RTRIM(prov.${colProvNombre}))`;
+      }
+    }
+  }
+
+  // IVA/Recargo de Equivalencia — Articu.<grupoiva> → Grupoiva.Tipo → Tablaiva.<tipo_articulo>.
+  // Sin precedente en este fichero: si Grupoiva/Tablaiva no existen, o alguna columna no
+  // resuelve, se manda piva/preq = null por línea y el servidor descarta esa línea del
+  // cálculo de dto_real (no se inventa ningún IVA por defecto).
+  let joinIva = '', selPiva = 'NULL', selPreq = 'NULL';
+  const tablasIvaR = await p.request().query(`SELECT name FROM sys.tables WHERE name IN ('Grupoiva', 'Tablaiva')`)
+    .catch(() => ({ recordset: [] }));
+  const tablasIva = new Set(tablasIvaR.recordset.map(r => r.name));
+  if (tablasIva.has('Grupoiva') && tablasIva.has('Tablaiva')) {
+    const colsArticuIva = new Set((await p.request().query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Articu'`
+    )).recordset.map(c => String(c.COLUMN_NAME)));
+    const colsGrupoiva = new Set((await p.request().query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Grupoiva'`
+    )).recordset.map(c => String(c.COLUMN_NAME)));
+    const colsTablaiva = new Set((await p.request().query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Tablaiva'`
+    )).recordset.map(c => String(c.COLUMN_NAME)));
+
+    const colArticuGrupoIva = await resolverAtributoColumna({
+      entidad: 'ARTICU', atributo: 'grupo_iva', candidatos: ['XGrup_IdGrupoIva', 'IdGrupoIva'],
+      columnasReales: colsArticuIva, descripcion: 'Columna de Articu con el código de grupo de IVA del artículo (FK a Grupoiva).',
+    });
+    const colGrupoivaId = await resolverAtributoColumna({
+      entidad: 'GRUPOIVA', atributo: 'id', candidatos: ['IdGrupoIva'],
+      columnasReales: colsGrupoiva, descripcion: 'Columna de Grupoiva con su código/clave primaria (la misma que referencia Articu).',
+    });
+    const colGrupoivaTipo = await resolverAtributoColumna({
+      entidad: 'GRUPOIVA', atributo: 'tipo', candidatos: ['Tipo'],
+      columnasReales: colsGrupoiva, descripcion: 'Columna de Grupoiva con el tipo de IVA (valores A/C/P) que se cruza después con Tablaiva.',
+    });
+    const colTablaivaTipoArt = await resolverAtributoColumna({
+      entidad: 'TABLAIVA', atributo: 'tipo_articulo', candidatos: ['IdTipoArt', 'IdTipo', 'Tipo'],
+      columnasReales: colsTablaiva,
+      descripcion: 'Columna de Tablaiva que corresponde al tipo de IVA de ARTÍCULOS específicamente — Tablaiva puede tener columnas separadas para artículos (IdTipoArt), clientes (IdTipoCli) y proveedores (IdTipoPro); debe usarse la de artículos, nunca las otras dos.',
+    });
+    const colPiva = await resolverAtributoColumna({
+      entidad: 'TABLAIVA', atributo: 'piva', candidatos: ['Piva', 'PIva', 'PorcentajeIva'],
+      columnasReales: colsTablaiva, descripcion: 'Columna de Tablaiva con el porcentaje de IVA (float, p.ej. 4, 10, 21).',
+    });
+    const colPreq = await resolverAtributoColumna({
+      entidad: 'TABLAIVA', atributo: 'preq', candidatos: ['PReq', 'PRecargo', 'RecargoEquivalencia'],
+      columnasReales: colsTablaiva, descripcion: 'Columna de Tablaiva con el porcentaje de recargo de equivalencia (float, p.ej. 0.5, 1.75, 5.2).',
+    });
+
+    if (colArticuGrupoIva && colGrupoivaId && colGrupoivaTipo && colTablaivaTipoArt && colPiva && colPreq) {
+      joinIva = `
+        LEFT JOIN Grupoiva gi ON gi.${colGrupoivaId} = a.${colArticuGrupoIva}
+        LEFT JOIN Tablaiva ti ON ti.${colTablaivaTipoArt} = gi.${colGrupoivaTipo}`;
+      selPiva = `ti.${colPiva}`;
+      selPreq = `ti.${colPreq}`;
+    } else {
+      log.warn('fetchRecepcionesDescuentoReal: join Articu→Grupoiva→Tablaiva no resoluble, se omite IVA/RE (piva/preq null).');
+    }
+  }
+
+  const fechaLim = new Date();
+  fechaLim.setDate(fechaLim.getDate() - diasAtras);
+  const fechaISO = fechaLim.toISOString().slice(0, 10);
+
+  const result = await p.request()
+    .input('fecha', sql.Date, fechaISO)
+    .query(`
+      SELECT
+        LTRIM(RTRIM(lr.${colCodigo})) AS codigo_nacional,
+        r.${colFecha}                 AS fecha,
+        lr.${colCantidad}             AS cantidad,
+        lr.${colImportePuc}           AS importe_puc,
+        ${selPiva}                    AS piva,
+        ${selPreq}                    AS preq,
+        ${selProveedorNombre}         AS proveedor_nombre,
+        r.IdRecep                     AS id_recep
+      FROM LineaRecep lr
+      INNER JOIN Recep r ON lr.IdRecep = r.IdRecep
+      INNER JOIN Articu a ON LTRIM(RTRIM(a.IdArticu)) = LTRIM(RTRIM(lr.${colCodigo}))
+      ${joinProveedor}
+      ${joinIva}
+      WHERE r.${colFecha} >= @fecha
+        AND lr.${colCantidad} > 0
+        AND lr.${colCodigo} IS NOT NULL
+    `).catch(err => { log.warn('fetchRecepcionesDescuentoReal falló:', err.message); return { recordset: [] }; });
+
+  const lineas = [];
+  for (const r of result.recordset) {
+    const cn = String(r.codigo_nacional).trim();
+    if (!cn || !/^\d{5,}$/.test(cn)) continue;
+    const fecha = new Date(r.fecha);
+    if (isNaN(fecha.getTime())) continue;
+    const cantidad = Number(r.cantidad);
+    if (isNaN(cantidad) || cantidad <= 0) continue;
+    const importePuc = r.importe_puc != null ? Number(r.importe_puc) : null;
+    if (importePuc == null || isNaN(importePuc) || importePuc <= 0) continue;
+    const piva = r.piva != null && !isNaN(Number(r.piva)) ? Number(r.piva) : null;
+    const preq = r.preq != null && !isNaN(Number(r.preq)) ? Number(r.preq) : null;
+    lineas.push({
+      cn,
+      fecha: fecha.toISOString().slice(0, 10),
+      cantidad,
+      importe_puc: +importePuc.toFixed(4),
+      piva,
+      preq,
+      proveedor_nombre: r.proveedor_nombre ? String(r.proveedor_nombre).trim() : null,
+      id_recep: String(r.id_recep),
+    });
+  }
+  log.info(`fetchRecepcionesDescuentoReal: ${lineas.length} líneas de recepción (${diasAtras} días)`);
+  return lineas;
+}
+
 // Hermana de fetchRecepcionesRecientes()/fetchRecepcionesDetalle(): aquella colapsa a una
 // fila por CN (precio más reciente) y esta manda el detalle línea a línea de los últimos 45
 // días (para cerrar fases de pedido) — ninguna de las dos sirve para saber "cuánto se recibió
@@ -2986,6 +3176,17 @@ const DIAGNOSTIC_QUERIES = {
       FROM Recep
       ORDER BY FechaRecep DESC`,
   },
+  // Predictor de descuentos (Publicitarios) Fase 1, 02/09/2026 — verificación manual del join
+  // Articu→Grupoiva→Tablaiva antes de confiar en fetchRecepcionesDescuentoReal() (sin
+  // precedente en este fichero, ver comentario de esa función). Solo lectura, TOP 50.
+  iva_grupoiva: {
+    sql: `SELECT TOP 50 * FROM Grupoiva`,
+    desc: 'Grupoiva completa — para confirmar columnas reales del predictor de descuentos',
+  },
+  iva_tablaiva: {
+    sql: `SELECT TOP 50 * FROM Tablaiva`,
+    desc: 'Tablaiva completa — para confirmar columnas reales del predictor de descuentos',
+  },
 };
 
 async function runDiagnostic(key) {
@@ -3042,6 +3243,7 @@ module.exports = {
   fetchComprasMensuales,
   fetchFavoritosListas,
   fetchMiembrosListasCategoria,
+  fetchRecepcionesDescuentoReal,
   fetchFavoritosActuales,
   fetchTicketMedio,
   fetchVendedoresFarmatic,

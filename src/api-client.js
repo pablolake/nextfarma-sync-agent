@@ -177,6 +177,28 @@ async function enviarMiembrosListasCategoria(miembros) {
   }
 }
 
+// Predictor de descuentos (Publicitarios) Fase 1 — ver fetchRecepcionesDescuentoReal() en
+// farmatic-client.js. El servidor decide scope/guardarraíl/cálculo de dto_real; el agente
+// solo manda la señal cruda por línea. Ventana de 90 días sobre todo el catálogo — igual de
+// grande o más que recepciones-detalle, mismo troceo en lotes.
+async function enviarRecepcionesDescuentoReal(lineas) {
+  const batchSize = parseInt(process.env.BATCH_SIZE, 10) || 500;
+  const batches    = chunk(lineas, batchSize);
+  const totals     = { total: 0, guardados: 0, descartados: 0, errors: 0 };
+  for (let i = 0; i < batches.length; i++) {
+    if (abortRequested) { log.warn(`Envío de recepciones (descuento real) cancelado (${i}/${batches.length} lotes enviados)`); throw new SyncAbortedError(); }
+    log.info(`Enviando lote recepciones-descuento-real ${i + 1}/${batches.length} (${batches[i].length})...`);
+    try {
+      const r = await request('/api/sync/recepciones-descuento-real', { method: 'POST', body: { lineas: batches[i] } });
+      totals.total += r.total || 0; totals.guardados += r.guardados || 0; totals.descartados += r.descartados || 0;
+    } catch (err) {
+      log.error(`Lote ${i + 1} falló:`, err.message);
+      totals.errors += batches[i].length;
+    }
+  }
+  return totals;
+}
+
 // Módulo Receta (documento de diseño v4.0, Fase 1) — top 3 laboratorios por volumen de venta
 // (últimos 12 meses), nunca más de 3 filas, así que un solo POST sin batching.
 async function enviarTopLaboratorios(laboratorios) {
@@ -406,6 +428,7 @@ module.exports = {
   enviarComprasMensuales,
   enviarFavoritos,
   enviarMiembrosListasCategoria,
+  enviarRecepcionesDescuentoReal,
   enviarTopLaboratorios,
   getCambiosPendientes,
   marcarCambiosProcesados,

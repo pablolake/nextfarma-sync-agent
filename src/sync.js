@@ -494,6 +494,17 @@ async function runSync(opts = {}) {
     log.warn('Recepciones (detalle) no disponibles:', e.message);
   }
 
+  // Predictor de descuentos (Publicitarios, pedido directo a laboratorio) Fase 1, 02/09/2026 —
+  // ventana más larga (90 días) e independiente del detalle de arriba: esto alimenta el
+  // cálculo de dto_real por línea, no la reconciliación de pedidos.
+  let recepcionesDescuentoReal = []
+  try {
+    recepcionesDescuentoReal = await farmatic.fetchRecepcionesDescuentoReal(90);
+    log.info(`✓ ${recepcionesDescuentoReal.length} líneas para predictor de descuentos (últimos 90 días)`);
+  } catch (e) {
+    log.warn('Recepciones (descuento real) no disponibles:', e.message);
+  }
+
   // Compras agregadas por mes (sección 5 del documento de instrucciones) — alimenta la
   // reconstrucción histórica de favorito en el backend ("la recepción confirma", punto 29b).
   // Ventana larga (24 meses) a propósito, a diferencia de los 12/45 días de arriba.
@@ -729,6 +740,15 @@ async function runSync(opts = {}) {
       log.info(`✓ Recepciones (detalle): ${r.upserts} líneas procesadas`);
     } catch (e) {
       log.warn('Error enviando recepciones (detalle):', e.message);
+    }
+  }
+
+  if (recepcionesDescuentoReal.length > 0) {
+    try {
+      const r = await api.enviarRecepcionesDescuentoReal(recepcionesDescuentoReal);
+      log.info(`✓ Predictor de descuentos: ${r.guardados} líneas guardadas, ${r.descartados} descartadas por el servidor`);
+    } catch (e) {
+      log.warn('Error enviando recepciones (descuento real):', e.message);
     }
   }
 
