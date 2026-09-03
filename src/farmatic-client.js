@@ -1491,6 +1491,37 @@ async function fetchFavoritosListas() {
   return favoritos;
 }
 
+// Lectura remota (02/09/2026) — pertenencia cruda (lista_id, cn) de ItemListaArticu, SIN el
+// JOIN a GeneArti que usa fetchFavoritosListas(). Motivo: en producción ese JOIN lleva
+// semanas devolviendo 0 filas para todas las farmacias (auditoría de favoritos/categoría
+// vacía en el panel de superadmin) y no hemos podido determinar la causa exacta sin acceso
+// remoto a Farmatic. En vez de seguir depurando el JOIN a ciegas, NextFarma resuelve el ch
+// del lado del servidor (ya tiene cns.ch sincronizado) a partir de este envío más simple.
+// Independiente de fetchFavoritosListas(): si esta lectura falla, no debe afectar al flujo
+// de favoritos que ya funciona (getCategoriaLista/procesarCambiosPendientes).
+async function fetchMiembrosListasCategoria() {
+  const lcat = getListaCategoria();
+  if (!lcat) { log.info('fetchMiembrosListasCategoria omitido: wizard Listas no configurado'); return []; }
+  const p   = await getPool();
+  const ids = Object.keys(lcat).join(',');
+
+  const result = await p.request().query(`
+    SELECT
+      i.XItem_IdLista  AS lista,
+      i.XItem_IdArticu AS cn
+    FROM ItemListaArticu i
+    WHERE i.XItem_IdLista IN (${ids})
+  `);
+
+  const miembros = result.recordset.map(row => ({
+    lista_id: Number(row.lista),
+    categoria: lcat[Number(row.lista)],
+    cn: Number(row.cn),
+  }));
+  log.info(`fetchMiembrosListasCategoria: ${miembros.length} miembros en ${ids.split(',').length} listas`);
+  return miembros;
+}
+
 // Contexto de dominio compartido por TODOS los diagnósticos de "búsqueda amplia" de
 // favoritos — no un texto genérico de una sola vez. Cuantos más casos reales vayamos
 // viendo, más se enriquece (el titular pidió explícitamente ir mejorando el prompt con el
@@ -3010,6 +3041,7 @@ module.exports = {
   fetchRecepcionesDetalle,
   fetchComprasMensuales,
   fetchFavoritosListas,
+  fetchMiembrosListasCategoria,
   fetchFavoritosActuales,
   fetchTicketMedio,
   fetchVendedoresFarmatic,

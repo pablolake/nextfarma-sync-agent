@@ -764,6 +764,21 @@ async function runSync(opts = {}) {
     log.warn('Favoritos omitidos:', e.message);
   }
 
+  // Lectura remota (02/09/2026) — pertenencia cruda de listas, sin el JOIN a GeneArti que usa
+  // fetchFavoritosListas() arriba. Independiente a propósito: si esto falla no debe afectar al
+  // flujo de favoritos que ya funciona, y viceversa.
+  try {
+    const miembros = await farmatic.fetchMiembrosListasCategoria();
+    if (miembros.length > 0) {
+      const r = await api.enviarMiembrosListasCategoria(miembros);
+      log.info(`✓ Miembros de listas: ${r.total ?? miembros.length} enviados para auditoría`);
+    } else {
+      log.warn('Miembros de listas: no se encontraron ítems en las listas de Farmatic.');
+    }
+  } catch (e) {
+    log.warn('Miembros de listas omitidos:', e.message);
+  }
+
   try {
     const curMes  = new Date().getMonth() + 1;
     const curAnio = new Date().getFullYear();

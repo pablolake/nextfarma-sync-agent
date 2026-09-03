@@ -167,6 +167,16 @@ async function enviarFavoritos(favoritos) {
   }
 }
 
+// Lectura remota (02/09/2026) — ver fetchMiembrosListasCategoria() en farmatic-client.js.
+async function enviarMiembrosListasCategoria(miembros) {
+  try {
+    return await request('/api/sync/miembros-listas-categoria', { method: 'POST', body: { miembros } });
+  } catch (err) {
+    log.error('enviarMiembrosListasCategoria falló:', err.message);
+    return { ok: false, total: 0 };
+  }
+}
+
 // Módulo Receta (documento de diseño v4.0, Fase 1) — top 3 laboratorios por volumen de venta
 // (últimos 12 meses), nunca más de 3 filas, así que un solo POST sin batching.
 async function enviarTopLaboratorios(laboratorios) {
@@ -395,6 +405,7 @@ module.exports = {
   enviarRecepcionesDetalle,
   enviarComprasMensuales,
   enviarFavoritos,
+  enviarMiembrosListasCategoria,
   enviarTopLaboratorios,
   getCambiosPendientes,
   marcarCambiosProcesados,
