@@ -209,11 +209,20 @@ async function runSync(opts = {}) {
     if (pendientes.length > 0 && pendientes.length < 6) {
       await api.reportarCategoriasSinResolver(pendientes).catch(() => {});
     }
+    // Diagnóstico (07/09/2026, Auxi Marbella): algunas instalaciones mantienen su propia lista
+    // "Cofares directo" en ListaArticu, independiente del 4DB (ver fetchListaCofaresDirectoCns) —
+    // se manda por si sirve para validar el % de descuento real visto por otras vías cuando el
+    // match de 4DB falla. No se usa todavía en ningún cálculo, solo diagnóstico.
+    const listaCofaresDirecto = await farmatic.fetchListaCofaresDirectoCns().catch(e => {
+      log.warn('fetchListaCofaresDirectoCns omitido:', e.message);
+      return null;
+    });
     await api.enviarSchemaInfo({
       ...schema,
       ...(calidad ? { calidad } : {}),
       ...(rgpd ? { rgpd } : {}),
       ...(listasFarmatic ? { listas: listasFarmatic } : {}),
+      ...(listaCofaresDirecto ? { lista_cofares_directo: listaCofaresDirecto } : {}),
     });
   } catch (e) {
     log.warn('Barrido de esquema omitido:', e.message);

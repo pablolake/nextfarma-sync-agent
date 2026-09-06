@@ -3260,6 +3260,31 @@ async function fetchListasWizard() {
   return r2.recordset.map(r => ({ id: Number(r.id), nombre: `Lista ${r.id}`, n_items: Number(r.n_items) }));
 }
 
+// Diagnóstico (07/09/2026, Auxi Marbella): algunas instalaciones mantienen su propia lista de
+// ListaArticu con un nombre tipo "*** Cofares directo ***" (visto en Auxi Marbella, 3.311
+// artículos — jose no tiene ninguna lista equivalente, así que no es un mecanismo estándar de
+// Farmatic, sino algo que esa farmacia en concreto ya usa/mantiene). Es una fuente
+// independiente de qué CN están realmente en el canal Cofares Directo, útil para validar (no
+// para sustituir) el % de descuento real visto por otras vías (4DB/LineaRecep) cuando el match
+// de 4DB falla — ver el bug de nombre de modelo 4DB investigado el mismo día. Solo diagnóstico
+// por ahora: no se usa todavía para decidir cofares_directo/dto en el cálculo de margen.
+async function fetchListaCofaresDirectoCns() {
+  const listas = await fetchListasWizard().catch(() => []);
+  const normaliza = s => String(s || '').toLowerCase().replace(/[^a-zñ]/g, '');
+  const candidata = listas.find(l => {
+    const n = normaliza(l.nombre);
+    return n.includes('cofares') && n.includes('directo');
+  });
+  if (!candidata) return null;
+
+  const p = await getPool();
+  const r = await p.request().query(`
+    SELECT XItem_IdArticu AS cn FROM ItemListaArticu WHERE XItem_IdLista = ${parseInt(candidata.id, 10)}
+  `).catch(() => ({ recordset: [] }));
+  const cns = r.recordset.map(row => String(row.cn).trim()).filter(cn => /^\d{5,}$/.test(cn));
+  return { id: candidata.id, nombre: candidata.nombre, cns };
+}
+
 // Queries diagnóstico predefinidas (solo lectura). Clave → { sql | () => sql, desc, fallback? }
 const DIAGNOSTIC_QUERIES = {
   vendedores: {
@@ -3467,6 +3492,7 @@ module.exports = {
   fetchVendedoresWizard,
   fetchLabsWizard,
   fetchListasWizard,
+  fetchListaCofaresDirectoCns,
   fetchRGPDCount,
   fetchRGPDDistribucion,
   runDiagnostic,
