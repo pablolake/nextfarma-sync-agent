@@ -439,7 +439,14 @@ async function fetchProductos() {
     });
     if (colProvId && colProvNombre) {
       joinProveedor = `LEFT JOIN Proveedor prov ON LTRIM(RTRIM(a.Laboratorio)) = LTRIM(RTRIM(prov.${colProvId}))`;
-      selProveedor  = `LTRIM(RTRIM(prov.${colProvNombre}))`;
+      // Respaldo en cascada (06/09/2026) — ver comentario homónimo en
+      // fetchRecepcionesDescuentoReal: Proveedor puede tener varias columnas de nombre a la
+      // vez (PER_NOMBRE/FIS_NOMBRE) y la memoria persistida solo fija una; aquí queda
+      // enmascarado por selLabor (línea de arriba) cuando esa fuente sí tiene dato, pero no
+      // conviene depender de eso.
+      const otrosCandidatosNombre = ['Nombre', 'PER_NOMBRE', 'FIS_NOMBRE'].filter(c => c !== colProvNombre && colsProv.has(c));
+      const piezas = [colProvNombre, ...otrosCandidatosNombre].map(c => `NULLIF(LTRIM(RTRIM(prov.${c})), '')`);
+      selProveedor = piezas.length > 1 ? `COALESCE(${piezas.join(', ')})` : piezas[0];
     }
   }
   const selLaboratorioNombre = `COALESCE(NULLIF(${selLabor}, ''), NULLIF(${selProveedor}, '')) AS laboratorio_nombre,`;
@@ -1179,7 +1186,18 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
       });
       if (colProvId && colProvNombre) {
         joinProveedor = `LEFT JOIN Proveedor prov ON prov.${colProvId} = r.${colProvIdRecep}`;
-        selProveedorNombre = `LTRIM(RTRIM(prov.${colProvNombre}))`;
+        // Respaldo (06/09/2026, bug real confirmado en jose: 19.871 recepciones capturadas,
+        // TODAS con proveedor_nombre NULL) — Proveedor puede tener varias columnas de nombre a
+        // la vez (PER_NOMBRE = nombre "personal"/comercial, FIS_NOMBRE = razón social fiscal);
+        // el resolver (memoria persistida, un único valor por instalación) había fijado
+        // PER_NOMBRE porque coincidía primero en la heurística, pero está en blanco para todos
+        // los proveedores reales de jose — nunca se detecta porque resolverAtributoColumna solo
+        // comprueba que la columna EXISTE, no que tenga datos. Se prueban aquí, en cascada, las
+        // demás columnas de nombre candidatas presentes en la tabla — sin coste si la primera
+        // ya tiene dato real.
+        const otrosCandidatosNombre = ['Nombre', 'PER_NOMBRE', 'FIS_NOMBRE'].filter(c => c !== colProvNombre && colsProv.has(c));
+        const piezas = [colProvNombre, ...otrosCandidatosNombre].map(c => `NULLIF(LTRIM(RTRIM(prov.${c})), '')`);
+        selProveedorNombre = piezas.length > 1 ? `COALESCE(${piezas.join(', ')})` : piezas[0];
       }
     }
   }
