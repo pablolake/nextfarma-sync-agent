@@ -868,6 +868,22 @@ async function fetchRecepcionesRecientes(mesesAtras = 12) {
   });
   if (!colFecha) { log.warn('Recep sin columna de fecha.'); return []; }
 
+  // Columna de unión Recep↔LineaRecep resuelta en vez de asumir 'IdRecep' en ambas (bug real
+  // 06/09/2026: farmacia jose tiene 'IdRecepcion' en las dos tablas, no 'IdRecep' — el
+  // comentario original de este archivo decía "ya probado en producción", una asunción nunca
+  // verificada contra el esquema real de jose. XRecep_IdRecep como tercer candidato porque
+  // otra consulta de este mismo fichero (recepciones_recientes, diagnóstico) asume ESE nombre
+  // para el lado de LineaRecep — ningún nombre es universal, así que los tres se ofrecen).
+  const colIdRecep = await resolverAtributoColumna({
+    entidad: 'RECEP', atributo: 'id', candidatos: ['IdRecep', 'IdRecepcion'],
+    columnasReales: colsRec, descripcion: 'Columna de Recep con su identificador único (clave primaria de la recepción/albarán).',
+  });
+  const colIdLineaRecep = await resolverAtributoColumna({
+    entidad: 'LINEA_RECEP', atributo: 'id_recep_fk', candidatos: ['IdRecep', 'IdRecepcion', 'XRecep_IdRecep'],
+    columnasReales: colsLR, descripcion: 'Columna de LineaRecep que referencia la recepción/albarán a la que pertenece esta línea (misma clave que el identificador de Recep, para cruzar ambas tablas).',
+  });
+  if (!colIdRecep || !colIdLineaRecep) { log.warn('Recep/LineaRecep sin columna de identificador resoluble.'); return []; }
+
   const selBonif  = colBonif ? `lr.${colBonif} AS bonificacion,` : `NULL AS bonificacion,`;
   const fechaLim  = new Date();
   fechaLim.setMonth(fechaLim.getMonth() - mesesAtras);
@@ -882,9 +898,9 @@ async function fetchRecepcionesRecientes(mesesAtras = 12) {
         lr.${colCantidad}             AS cantidad,
         lr.${colPrecio}               AS precio_neto,
         ${selBonif}
-        r.IdRecep                     AS id_recep
+        r.${colIdRecep}               AS id_recep
       FROM ${nombreLineaRecep} lr
-      INNER JOIN ${nombreRecep} r ON lr.IdRecep = r.IdRecep
+      INNER JOIN ${nombreRecep} r ON lr.${colIdLineaRecep} = r.${colIdRecep}
       WHERE r.${colFecha} >= @fecha
         AND lr.${colCantidad} > 0
         AND lr.${colCodigo} IS NOT NULL
@@ -981,6 +997,18 @@ async function fetchRecepcionesDetalle(diasAtras = 45) {
   });
   if (!colFecha) { log.warn('Recep sin columna de fecha (detalle).'); return []; }
 
+  // Columna de unión resuelta, no asumida — ver comentario en fetchRecepcionesRecientes
+  // (bug real 06/09/2026, farmacia jose usa 'IdRecepcion' en ambas tablas, no 'IdRecep').
+  const colIdRecep = await resolverAtributoColumna({
+    entidad: 'RECEP', atributo: 'id', candidatos: ['IdRecep', 'IdRecepcion'],
+    columnasReales: colsRec, descripcion: 'Columna de Recep con su identificador único (clave primaria de la recepción/albarán).',
+  });
+  const colIdLineaRecep = await resolverAtributoColumna({
+    entidad: 'LINEA_RECEP', atributo: 'id_recep_fk', candidatos: ['IdRecep', 'IdRecepcion', 'XRecep_IdRecep'],
+    columnasReales: colsLR, descripcion: 'Columna de LineaRecep que referencia la recepción/albarán a la que pertenece esta línea (misma clave que el identificador de Recep, para cruzar ambas tablas).',
+  });
+  if (!colIdRecep || !colIdLineaRecep) { log.warn('Recep/LineaRecep sin columna de identificador resoluble (detalle).'); return []; }
+
   const fechaLim = new Date();
   fechaLim.setDate(fechaLim.getDate() - diasAtras);
   const fechaISO = fechaLim.toISOString().slice(0, 10);
@@ -997,9 +1025,9 @@ async function fetchRecepcionesDetalle(diasAtras = 45) {
         lr.${colCantidad}             AS cantidad,
         ${selPrecio}
         ${selBonif}
-        r.IdRecep                     AS id_recep
+        r.${colIdRecep}               AS id_recep
       FROM ${nombreLineaRecep} lr
-      INNER JOIN ${nombreRecep} r ON lr.IdRecep = r.IdRecep
+      INNER JOIN ${nombreRecep} r ON lr.${colIdLineaRecep} = r.${colIdRecep}
       WHERE r.${colFecha} >= @fecha
         AND lr.${colCantidad} > 0
         AND lr.${colCodigo} IS NOT NULL
@@ -1030,9 +1058,13 @@ async function fetchRecepcionesDetalle(diasAtras = 45) {
 }
 
 // Predictor de descuentos (Publicitarios, pedido directo a laboratorio) — Fase 1, 02/09/2026.
-// Hermana de fetchRecepcionesDetalle(), mismo join base LineaRecep+Recep ya probado en
-// producción (lr.IdRecep = r.IdRecep — NO el XRecep_IdRecep que usa el diagnóstico
-// 'recepciones_recientes', ese no está verificado contra ninguna instalación real). Añade tres
+// Hermana de fetchRecepcionesDetalle(), mismo join base LineaRecep+Recep — la columna de unión
+// se resuelve en vivo (colIdRecep/colIdLineaRecep), NO se asume 'IdRecep' literal: esa asunción
+// ("ya probado en producción") resultó falsa contra el esquema real de farmacia jose
+// ('IdRecepcion' en ambas tablas, confirmado 06/09/2026 con el error real "Invalid column name
+// 'IdRecep'"). El diagnóstico 'recepciones_recientes' (más abajo) sigue con el nombre hardcodeado
+// XRecep_IdRecep/IdRecep sin resolver — es una consulta manual de admin, no bloquea el sync
+// automático, pero tiene el mismo riesgo pendiente de arreglar. Añade tres
 // cosas nuevas que fetchRecepcionesDetalle no necesita: el importe CON impuestos (ImportePuc,
 // para poder reconstruir el PUC neto vía Piva/PReq), el proveedor real de la recepción (para
 // filtrar cooperativa vs directo, servidor decide con qué patrones) y el tipo de IVA/RE del
@@ -1109,6 +1141,22 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
   if (!colFecha) {
     log.warn('fetchRecepcionesDescuentoReal: Recep sin columna de fecha.');
     return { lineas: [], diagnostico: 'Predictor de descuentos: Recep no tiene columna de fecha resuelta — recepciones no disponibles.' };
+  }
+  // Columna de unión resuelta, no asumida — ver comentario en fetchRecepcionesRecientes
+  // (bug real 06/09/2026, confirmado en producción: farmacia jose usa 'IdRecepcion' en ambas
+  // tablas, no 'IdRecep' — este era el error real "Invalid column name 'IdRecep'" que se vio
+  // en el primer sync de jose con el fix de mayúsculas ya aplicado).
+  const colIdRecep = await resolverAtributoColumna({
+    entidad: 'RECEP', atributo: 'id', candidatos: ['IdRecep', 'IdRecepcion'],
+    columnasReales: colsRec, descripcion: 'Columna de Recep con su identificador único (clave primaria de la recepción/albarán).',
+  });
+  const colIdLineaRecep = await resolverAtributoColumna({
+    entidad: 'LINEA_RECEP', atributo: 'id_recep_fk', candidatos: ['IdRecep', 'IdRecepcion', 'XRecep_IdRecep'],
+    columnasReales: colsLR, descripcion: 'Columna de LineaRecep que referencia la recepción/albarán a la que pertenece esta línea (misma clave que el identificador de Recep, para cruzar ambas tablas).',
+  });
+  if (!colIdRecep || !colIdLineaRecep) {
+    log.warn('fetchRecepcionesDescuentoReal: Recep/LineaRecep sin columna de identificador resoluble.');
+    return { lineas: [], diagnostico: 'Predictor de descuentos: no se pudo resolver la columna de identificador de Recep/LineaRecep — recepciones no disponibles.' };
   }
 
   // Proveedor: mismas columnas que ya resuelve fetchProductos() para laboratorio_nombre
@@ -1216,9 +1264,9 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
         ${selPiva}                    AS piva,
         ${selPreq}                    AS preq,
         ${selProveedorNombre}         AS proveedor_nombre,
-        r.IdRecep                     AS id_recep
+        r.${colIdRecep}               AS id_recep
       FROM ${nombreLineaRecep} lr
-      INNER JOIN ${nombreRecep} r ON lr.IdRecep = r.IdRecep
+      INNER JOIN ${nombreRecep} r ON lr.${colIdLineaRecep} = r.${colIdRecep}
       INNER JOIN Articu a ON LTRIM(RTRIM(a.IdArticu)) = LTRIM(RTRIM(lr.${colCodigo}))
       ${joinProveedor}
       ${joinIva}
@@ -1323,6 +1371,18 @@ async function fetchComprasMensuales(mesesAtras = 24) {
   });
   if (!colFecha) { log.warn('Recep sin columna de fecha (compras mensuales).'); return []; }
 
+  // Columna de unión resuelta, no asumida — ver comentario en fetchRecepcionesRecientes
+  // (bug real 06/09/2026, farmacia jose usa 'IdRecepcion' en ambas tablas, no 'IdRecep').
+  const colIdRecep = await resolverAtributoColumna({
+    entidad: 'RECEP', atributo: 'id', candidatos: ['IdRecep', 'IdRecepcion'],
+    columnasReales: colsRec, descripcion: 'Columna de Recep con su identificador único (clave primaria de la recepción/albarán).',
+  });
+  const colIdLineaRecep = await resolverAtributoColumna({
+    entidad: 'LINEA_RECEP', atributo: 'id_recep_fk', candidatos: ['IdRecep', 'IdRecepcion', 'XRecep_IdRecep'],
+    columnasReales: colsLR, descripcion: 'Columna de LineaRecep que referencia la recepción/albarán a la que pertenece esta línea (misma clave que el identificador de Recep, para cruzar ambas tablas).',
+  });
+  if (!colIdRecep || !colIdLineaRecep) { log.warn('Recep/LineaRecep sin columna de identificador resoluble (compras mensuales).'); return []; }
+
   const fechaLim = new Date();
   fechaLim.setMonth(fechaLim.getMonth() - mesesAtras);
   const fechaISO = fechaLim.toISOString().slice(0, 10);
@@ -1336,7 +1396,7 @@ async function fetchComprasMensuales(mesesAtras = 24) {
         MONTH(r.${colFecha})          AS mes,
         SUM(lr.${colCantidad})        AS unidades
       FROM ${nombreLineaRecep} lr
-      INNER JOIN ${nombreRecep} r ON lr.IdRecep = r.IdRecep
+      INNER JOIN ${nombreRecep} r ON lr.${colIdLineaRecep} = r.${colIdRecep}
       WHERE r.${colFecha} >= @fecha
         AND lr.${colCantidad} > 0
         AND lr.${colCodigo} IS NOT NULL
