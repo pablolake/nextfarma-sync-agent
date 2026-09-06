@@ -444,6 +444,17 @@ function setupAutoUpdater() {
   });
 
   setTimeout(() => autoUpdater.checkForUpdates().catch(() => {}), 8000);
+  // 07/09/2026: la app se queda corriendo indefinidamente en la bandeja (cerrar la ventana
+  // solo la oculta, ver mainWindow.on('close') más abajo) — sin esto, una versión publicada
+  // DESPUÉS de que la farmacia ya tenga la app abierta nunca se detecta hasta el próximo
+  // arranque real (reinicio de Windows), obligando a pedir la actualización manual cada vez.
+  // Repetir el chequeo cada 3h la descubre sola sin más esfuerzo que un vistazo periódico a
+  // GitHub Releases; sigue sin forzar el reinicio (autoInstallOnAppQuit ya lo deja pendiente
+  // hasta que la farmacia cierre la app de verdad o pulse "Instalar" en la bandeja).
+  setInterval(() => {
+    if (pendingUpdate) return
+    autoUpdater.checkForUpdates().catch(() => {})
+  }, 3 * 60 * 60 * 1000);
 }
 
 ipcMain.handle('install-update', () => {
