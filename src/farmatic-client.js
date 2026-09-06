@@ -805,15 +805,26 @@ async function fetchVentasAnuales(anio) {
 async function fetchRecepcionesRecientes(mesesAtras = 12) {
   const p = await getPool();
 
-  const tablas = await p.request().query(`SELECT name FROM sys.tables WHERE name IN ('Recep', 'LineaRecep')`);
-  const existe = new Set(tablas.recordset.map(r => r.name));
-  if (!existe.has('Recep') || !existe.has('LineaRecep')) {
+  // Mismo bug real que fetchRecepcionesDescuentoReal (06/09/2026): el check case-sensitive
+  // contra 'Recep'/'LineaRecep' no encontraba la instalación de farmacia jose (tabla real
+  // 'LINEARECEP') — ahora vía tablasCandidatas+resolverAtributoTabla (mismo patrón que
+  // fetchListasWizard), con heurística + IA + persistencia si el nombre real difiere.
+  const tablasDisponibles = new Set((await tablasCandidatas(p, ['Recep', 'LineaRecep'])).map(r => r.name));
+  const nombreRecep = await resolverAtributoTabla({
+    entidad: 'RECEP', atributo: 'tabla', candidatos: ['Recep'], tablasReales: tablasDisponibles,
+    descripcion: 'Tabla de Farmatic con las cabeceras de recepción/albarán de mercancía (proveedor, fecha).',
+  });
+  const nombreLineaRecep = await resolverAtributoTabla({
+    entidad: 'LINEA_RECEP', atributo: 'tabla', candidatos: ['LineaRecep'], tablasReales: tablasDisponibles,
+    descripcion: 'Tabla de Farmatic con las líneas de recepción/albarán (artículo, cantidad, importe recibido).',
+  });
+  if (!nombreRecep || !nombreLineaRecep) {
     log.warn('Tablas Recep/LineaRecep no encontradas.');
     return [];
   }
 
   const colsR = await p.request().query(
-    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'LineaRecep'`
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${nombreLineaRecep}'`
   );
   const colsLR = new Set(colsR.recordset.map(c => String(c.COLUMN_NAME)));
 
@@ -840,7 +851,7 @@ async function fetchRecepcionesRecientes(mesesAtras = 12) {
   }
 
   const colsR2 = await p.request().query(
-    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Recep'`
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${nombreRecep}'`
   );
   const colsRec  = new Set(colsR2.recordset.map(c => String(c.COLUMN_NAME)));
   const colFecha = await resolverAtributoColumna({
@@ -864,8 +875,8 @@ async function fetchRecepcionesRecientes(mesesAtras = 12) {
         lr.${colPrecio}               AS precio_neto,
         ${selBonif}
         r.IdRecep                     AS id_recep
-      FROM LineaRecep lr
-      INNER JOIN Recep r ON lr.IdRecep = r.IdRecep
+      FROM ${nombreLineaRecep} lr
+      INNER JOIN ${nombreRecep} r ON lr.IdRecep = r.IdRecep
       WHERE r.${colFecha} >= @fecha
         AND lr.${colCantidad} > 0
         AND lr.${colCodigo} IS NOT NULL
@@ -905,15 +916,24 @@ async function fetchRecepcionesRecientes(mesesAtras = 12) {
 async function fetchRecepcionesDetalle(diasAtras = 45) {
   const p = await getPool();
 
-  const tablas = await p.request().query(`SELECT name FROM sys.tables WHERE name IN ('Recep', 'LineaRecep')`);
-  const existe = new Set(tablas.recordset.map(r => r.name));
-  if (!existe.has('Recep') || !existe.has('LineaRecep')) {
+  // Mismo bug real que fetchRecepcionesRecientes/fetchRecepcionesDescuentoReal (06/09/2026) —
+  // ver comentario ahí (resuelto vía tablasCandidatas+resolverAtributoTabla).
+  const tablasDisponibles = new Set((await tablasCandidatas(p, ['Recep', 'LineaRecep'])).map(r => r.name));
+  const nombreRecep = await resolverAtributoTabla({
+    entidad: 'RECEP', atributo: 'tabla', candidatos: ['Recep'], tablasReales: tablasDisponibles,
+    descripcion: 'Tabla de Farmatic con las cabeceras de recepción/albarán de mercancía (proveedor, fecha).',
+  });
+  const nombreLineaRecep = await resolverAtributoTabla({
+    entidad: 'LINEA_RECEP', atributo: 'tabla', candidatos: ['LineaRecep'], tablasReales: tablasDisponibles,
+    descripcion: 'Tabla de Farmatic con las líneas de recepción/albarán (artículo, cantidad, importe recibido).',
+  });
+  if (!nombreRecep || !nombreLineaRecep) {
     log.warn('Tablas Recep/LineaRecep no encontradas (detalle).');
     return [];
   }
 
   const colsR = await p.request().query(
-    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'LineaRecep'`
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${nombreLineaRecep}'`
   );
   const colsLR = new Set(colsR.recordset.map(c => String(c.COLUMN_NAME)));
 
@@ -944,7 +964,7 @@ async function fetchRecepcionesDetalle(diasAtras = 45) {
   });
 
   const colsR2 = await p.request().query(
-    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Recep'`
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${nombreRecep}'`
   );
   const colsRec  = new Set(colsR2.recordset.map(c => String(c.COLUMN_NAME)));
   const colFecha = await resolverAtributoColumna({
@@ -970,8 +990,8 @@ async function fetchRecepcionesDetalle(diasAtras = 45) {
         ${selPrecio}
         ${selBonif}
         r.IdRecep                     AS id_recep
-      FROM LineaRecep lr
-      INNER JOIN Recep r ON lr.IdRecep = r.IdRecep
+      FROM ${nombreLineaRecep} lr
+      INNER JOIN ${nombreRecep} r ON lr.IdRecep = r.IdRecep
       WHERE r.${colFecha} >= @fecha
         AND lr.${colCantidad} > 0
         AND lr.${colCodigo} IS NOT NULL
@@ -1024,15 +1044,30 @@ async function fetchRecepcionesDetalle(diasAtras = 45) {
 async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
   const p = await getPool();
 
-  const tablas = await p.request().query(`SELECT name FROM sys.tables WHERE name IN ('Recep', 'LineaRecep')`);
-  const existe = new Set(tablas.recordset.map(r => r.name));
-  if (!existe.has('Recep') || !existe.has('LineaRecep')) {
+  // Nombre real de Recep/LineaRecep vía tablasCandidatas+resolverAtributoTabla (06/09/2026,
+  // bug real encontrado en producción: farmacia jose tiene la tabla como 'LINEARECEP', no
+  // 'LineaRecep' — el viejo check `sys.tables WHERE name IN ('LineaRecep')` es sensible a
+  // mayúsculas/minúsculas en esta instalación y nunca la encontraba, dejando este predictor
+  // (y fetchRecepcionesRecientes/fetchRecepcionesDetalle/fetchComprasMensuales, mismo patrón)
+  // sin datos para esta farmacia en concreto, invisible hasta que se auditó el aviso durable
+  // de ayer). Mismo mecanismo ya usado para "ListaArticu" (ver fetchListasWizard) — heurística
+  // de candidatos primero, IA + persistencia en farmatic_field_map si la heurística falla.
+  const tablasDisponibles = new Set((await tablasCandidatas(p, ['Recep', 'LineaRecep'])).map(r => r.name));
+  const nombreRecep = await resolverAtributoTabla({
+    entidad: 'RECEP', atributo: 'tabla', candidatos: ['Recep'], tablasReales: tablasDisponibles,
+    descripcion: 'Tabla de Farmatic con las cabeceras de recepción/albarán de mercancía (proveedor, fecha).',
+  });
+  const nombreLineaRecep = await resolverAtributoTabla({
+    entidad: 'LINEA_RECEP', atributo: 'tabla', candidatos: ['LineaRecep'], tablasReales: tablasDisponibles,
+    descripcion: 'Tabla de Farmatic con las líneas de recepción/albarán (artículo, cantidad, importe recibido).',
+  });
+  if (!nombreRecep || !nombreLineaRecep) {
     log.info('fetchRecepcionesDescuentoReal omitido: Recep/LineaRecep no encontradas.');
     return { lineas: [], diagnostico: 'Predictor de descuentos: esta instalación no tiene tablas Recep/LineaRecep — recepciones no disponibles.' };
   }
 
   const colsLR = new Set((await p.request().query(
-    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'LineaRecep'`
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${nombreLineaRecep}'`
   )).recordset.map(c => String(c.COLUMN_NAME)));
   const colCodigo = await resolverAtributoColumna({
     entidad: 'LINEA_RECEP', atributo: 'codigo', candidatos: ['Codigo', 'IdArticu'],
@@ -1053,7 +1088,7 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
   }
 
   const colsRec = new Set((await p.request().query(
-    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Recep'`
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${nombreRecep}'`
   )).recordset.map(c => String(c.COLUMN_NAME)));
   const colFecha = await resolverAtributoColumna({
     entidad: 'RECEP', atributo: 'fecha', candidatos: ['FechaAlbaran', 'Fecha', 'FechaRecep'],
@@ -1169,8 +1204,8 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
         ${selPreq}                    AS preq,
         ${selProveedorNombre}         AS proveedor_nombre,
         r.IdRecep                     AS id_recep
-      FROM LineaRecep lr
-      INNER JOIN Recep r ON lr.IdRecep = r.IdRecep
+      FROM ${nombreLineaRecep} lr
+      INNER JOIN ${nombreRecep} r ON lr.IdRecep = r.IdRecep
       INNER JOIN Articu a ON LTRIM(RTRIM(a.IdArticu)) = LTRIM(RTRIM(lr.${colCodigo}))
       ${joinProveedor}
       ${joinIva}
@@ -1232,15 +1267,24 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
 async function fetchComprasMensuales(mesesAtras = 24) {
   const p = await getPool();
 
-  const tablas = await p.request().query(`SELECT name FROM sys.tables WHERE name IN ('Recep', 'LineaRecep')`);
-  const existe = new Set(tablas.recordset.map(r => r.name));
-  if (!existe.has('Recep') || !existe.has('LineaRecep')) {
+  // Mismo bug real que fetchRecepcionesRecientes/fetchRecepcionesDetalle/
+  // fetchRecepcionesDescuentoReal (06/09/2026) — ver comentario ahí.
+  const tablasDisponibles = new Set((await tablasCandidatas(p, ['Recep', 'LineaRecep'])).map(r => r.name));
+  const nombreRecep = await resolverAtributoTabla({
+    entidad: 'RECEP', atributo: 'tabla', candidatos: ['Recep'], tablasReales: tablasDisponibles,
+    descripcion: 'Tabla de Farmatic con las cabeceras de recepción/albarán de mercancía (proveedor, fecha).',
+  });
+  const nombreLineaRecep = await resolverAtributoTabla({
+    entidad: 'LINEA_RECEP', atributo: 'tabla', candidatos: ['LineaRecep'], tablasReales: tablasDisponibles,
+    descripcion: 'Tabla de Farmatic con las líneas de recepción/albarán (artículo, cantidad, importe recibido).',
+  });
+  if (!nombreRecep || !nombreLineaRecep) {
     log.warn('Tablas Recep/LineaRecep no encontradas (compras mensuales).');
     return [];
   }
 
   const colsR = await p.request().query(
-    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'LineaRecep'`
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${nombreLineaRecep}'`
   );
   const colsLR = new Set(colsR.recordset.map(c => String(c.COLUMN_NAME)));
   const colCodigo = await resolverAtributoColumna({
@@ -1257,7 +1301,7 @@ async function fetchComprasMensuales(mesesAtras = 24) {
   }
 
   const colsR2 = await p.request().query(
-    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Recep'`
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${nombreRecep}'`
   );
   const colsRec  = new Set(colsR2.recordset.map(c => String(c.COLUMN_NAME)));
   const colFecha = await resolverAtributoColumna({
@@ -1278,8 +1322,8 @@ async function fetchComprasMensuales(mesesAtras = 24) {
         YEAR(r.${colFecha})           AS anio,
         MONTH(r.${colFecha})          AS mes,
         SUM(lr.${colCantidad})        AS unidades
-      FROM LineaRecep lr
-      INNER JOIN Recep r ON lr.IdRecep = r.IdRecep
+      FROM ${nombreLineaRecep} lr
+      INNER JOIN ${nombreRecep} r ON lr.IdRecep = r.IdRecep
       WHERE r.${colFecha} >= @fecha
         AND lr.${colCantidad} > 0
         AND lr.${colCodigo} IS NOT NULL
@@ -3035,15 +3079,23 @@ async function fetchLabsWizard() {
 }
 
 // Consulta estrecha primero (nombres esperados — "caso jose"/estándar, rápida y gratis);
-// si no encuentra NADA, cae a listar TODAS las tablas reales de la instalación, para que
-// resolverAtributoTabla pueda ofrecerle a la IA el universo completo en vez de quedarse
-// sin candidatos por culpa de un nombre de tabla inesperado. El caso habitual resuelve en
-// el primer intento sin necesidad de la consulta amplia.
+// si no cubre TODOS los nombres pedidos, cae a listar TODAS las tablas reales de la
+// instalación, para que resolverAtributoTabla pueda ofrecerle a la IA el universo completo en
+// vez de quedarse sin candidatos por culpa de un nombre de tabla inesperado. El caso habitual
+// resuelve en el primer intento sin necesidad de la consulta amplia.
+// Corregido 06/09/2026 (bug real, farmacia jose): antes caía a la consulta amplia solo si la
+// estrecha devolvía CERO filas — con 2+ nombres pedidos y solo ALGUNOS coincidiendo por
+// mayúsculas/minúsculas (aquí: 'Recep' sí, 'LineaRecep' no — la tabla real es 'LINEARECEP'),
+// la estrecha devolvía una fila no vacía y el corte impedía que 'LINEARECEP' apareciera nunca
+// entre las opciones ofrecidas a resolverAtributoTabla, ni siquiera a su respaldo de IA.
 async function tablasCandidatas(p, nombresEsperados) {
   const estrecha = await p.request().query(
     `SELECT name FROM sys.tables WHERE name IN (${nombresEsperados.map(t => `'${t}'`).join(',')})`
   ).catch(() => ({ recordset: [] }));
-  if (estrecha.recordset.length) return estrecha.recordset;
+  const cubreTodos = nombresEsperados.every(esperado =>
+    estrecha.recordset.some(r => r.name === esperado)
+  );
+  if (cubreTodos) return estrecha.recordset;
   const amplia = await p.request().query(`SELECT name FROM sys.tables`).catch(() => ({ recordset: [] }));
   return amplia.recordset;
 }
