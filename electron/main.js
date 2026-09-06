@@ -368,11 +368,16 @@ ipcMain.handle('wizard-get-lists', async () => {
   try {
     const farmatic = require('../src/farmatic-client');
     const data = await farmatic.fetchListasWizard();
-    // Detección por nombre (caso jose: "INCENTIVADOS", "MAX ROTACION A/B"...) — se manda
-    // como sugerencia al wizard, nunca se aplica sola. Si esta instalación usa nombres
-    // distintos no detecta nada y el titular sigue eligiendo a mano del desplegable.
-    const detectadas = farmatic.detectarListasPorNombre(data);
-    return { ok: true, data, detectadas };
+    // Detección por nombre DESACTIVADA (06/09/2026, decisión explícita del titular tras un
+    // caso real: en Auxi Marbella coincidió por nombre con una lista real de la farmacia
+    // ("medicamentos caros") que no tenía nada que ver, y quedó guardada sin que nadie lo
+    // notara — la sugerencia se acepta con un solo clic y el operador del asistente no
+    // siempre conoce a fondo cómo organiza esa farmacia sus listas. A partir de ahora cada
+    // farmacia nueva parte de cero: todas las categorías empiezan en "— Sin asignar —" y, si
+    // se dejan así, el sync crea sus propias listas dedicadas (ver sembrarFavoritosReales/
+    // reconciliarFavoritosColor en farmatic-client.js, gateadas por farmatic_autocrear_listas)
+    // en vez de arriesgarse a reutilizar una lista real ajena por coincidencia de texto.
+    return { ok: true, data, detectadas: {} };
   } catch (err) {
     return { ok: false, error: err.message };
   }
