@@ -181,7 +181,15 @@ async function discoverSchema() {
       for (const row of colsConsejoR.recordset) tablas[row.TABLE_NAME].push({ nombre: row.COLUMN_NAME, tipo: row.DATA_TYPE });
     }
 
-    const faltantes = TABLAS_ESPERADAS.filter(t => !tablas[t]);
+    // Comparación insensible a mayúsculas/minúsculas (06/09/2026, auditoría posterior al bug
+    // real de LINEARECEP): `tablas` guarda las claves con el casing REAL de la instalación
+    // (aquí, 'LINEARECEP'), así que `tablas['LineaRecep']` (el nombre esperado, mixed-case)
+    // siempre salía undefined aunque la tabla existiera con 37K+ filas — el panel de admin
+    // reportaba "tabla esperada faltante" de forma engañosa. Esto es solo diagnóstico (las
+    // funciones de sync real ya usan resolverAtributoTabla, insensible a esto) pero merece
+    // arreglarse para no confundir al leer el panel.
+    const clavesReales = new Set(Object.keys(tablas).map(k => k.toUpperCase()));
+    const faltantes = TABLAS_ESPERADAS.filter(t => !clavesReales.has(t.toUpperCase()));
 
     // Barrido COMPLETO (todas las tablas reales, no solo las esperadas) — para que el
     // panel admin pueda ofrecer un selector de "tabla.columna" real de esta instalación
@@ -1183,7 +1191,12 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
       log.warn('fetchRecepcionesDescuentoReal: join Articu→Grupoiva→Tablaiva no resoluble, se omite IVA/RE (piva/preq null).');
       diagnosticoIva = 'Predictor de descuentos: no se pudo resolver el cruce Articu→Grupoiva→Tablaiva — todas las recepciones se mandan sin IVA/RE, así que el servidor las descarta (motivo "sin_iva") en vez de calcular el descuento real.';
     }
-  } else if (existe.has('Recep') && existe.has('LineaRecep')) {
+  } else {
+    // Llegados aquí, Recep/LineaRecep YA están confirmadas (si no, la función ya habría
+    // devuelto arriba) — este `else` es simplemente "no hay Grupoiva/Tablaiva en absoluto".
+    // (06/09/2026: esta rama referenciaba una variable `existe` que dejó de existir tras el
+    // refactor de tablasCandidatas/resolverAtributoTabla del mismo día — ReferenceError real
+    // en cualquier instalación sin Grupoiva/Tablaiva, encontrado en auditoría posterior.)
     diagnosticoIva = 'Predictor de descuentos: esta instalación no tiene tablas Grupoiva/Tablaiva — todas las recepciones se mandan sin IVA/RE, así que el servidor las descarta (motivo "sin_iva").';
   }
 

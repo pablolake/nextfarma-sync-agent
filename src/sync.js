@@ -945,6 +945,14 @@ async function runSync(opts = {}) {
           .then(listasActualizadas => api.enviarSchemaInfo({ listas: listasActualizadas }))
           .catch(e => warn('No se pudo actualizar la estructura tras crear la Lista Roja: ' + e.message));
       }
+      // 06/09/2026, auditoría posterior: aseguradaRoja.fallos (creadas/renombradas fallidas
+      // por bucket) nunca se miraba aquí — a diferencia de las categorías/colores de más
+      // arriba (fallos_creacion), un fallo real al crear la Lista Roja quedaba completamente
+      // silencioso, sin ningún aviso durable. Encontrado auditando por qué farmacia Jose 2
+      // no tiene ninguna lista "rojo"/"negra" pese a tener la autocreación activada.
+      if (aseguradaRoja?.fallos?.length) {
+        warn(`No se pudo crear/renombrar la Lista Roja: ${aseguradaRoja.fallos.join('; ')}`);
+      }
     }
   } catch (e) {
     warn('Auto-creación de la Lista Roja omitida: ' + e.message);
