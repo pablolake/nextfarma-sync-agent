@@ -499,10 +499,17 @@ async function runSync(opts = {}) {
   // cálculo de dto_real por línea, no la reconciliación de pedidos.
   let recepcionesDescuentoReal = []
   try {
-    recepcionesDescuentoReal = await farmatic.fetchRecepcionesDescuentoReal(90);
+    // 06/09/2026: fetchRecepcionesDescuentoReal devuelve { lineas, diagnostico } — antes solo
+    // devolvía el array y cualquier guardarraíl interno que fallara (tablas/columnas no
+    // resueltas, join de IVA no resoluble) quedaba invisible en el log local del cliente,
+    // nunca llegaba a last_sync_warnings_detalle. Encontrado auditando por qué esta tabla no
+    // tenía ni una fila en producción semanas después de desplegar el predictor.
+    const r = await farmatic.fetchRecepcionesDescuentoReal(90);
+    recepcionesDescuentoReal = r.lineas;
     log.info(`✓ ${recepcionesDescuentoReal.length} líneas para predictor de descuentos (últimos 90 días)`);
+    if (r.diagnostico) warn(r.diagnostico);
   } catch (e) {
-    log.warn('Recepciones (descuento real) no disponibles:', e.message);
+    warn('Recepciones (descuento real) no disponibles: ' + e.message);
   }
 
   // Compras agregadas por mes (sección 5 del documento de instrucciones) — alimenta la

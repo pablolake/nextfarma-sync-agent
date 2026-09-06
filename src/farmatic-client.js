@@ -1013,6 +1013,14 @@ async function fetchRecepcionesDetalle(diasAtras = 45) {
 // puede confirmar sin ver el esquema real de una instalación, así que si algo no resuelve se
 // manda null y el servidor descarta esa línea del cálculo en vez de arriesgar un dato
 // contaminado (mismo criterio que ya costó caro con "pvl", ver comentario más arriba).
+// Devuelve { lineas, diagnostico } en vez de solo el array (06/09/2026, encontrado auditando
+// por qué el predictor de descuentos nunca produjo ni una sola fila en producción para NINGÚN
+// tenant, semanas después de desplegarlo): todos los "return []" de más abajo antes solo hacían
+// log.info/log.warn LOCAL — invisible para cualquiera que no tenga el log del cliente a mano,
+// exactamente el mismo punto ciego que ya causó una vez el bug real de BP_CONJARTI (ver
+// diagnóstico de gp_clasificacion/CTE_CN_EFECTIVO). `diagnostico`, si no es null, se manda como
+// warning durable (last_sync_warnings_detalle) desde sync.js — así el próximo sync dice EXACTAMENTE
+// qué guardarraíl no se resolvió, en vez de quedar en silencio otra vez.
 async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
   const p = await getPool();
 
@@ -1020,7 +1028,7 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
   const existe = new Set(tablas.recordset.map(r => r.name));
   if (!existe.has('Recep') || !existe.has('LineaRecep')) {
     log.info('fetchRecepcionesDescuentoReal omitido: Recep/LineaRecep no encontradas.');
-    return [];
+    return { lineas: [], diagnostico: 'Predictor de descuentos: esta instalación no tiene tablas Recep/LineaRecep — recepciones no disponibles.' };
   }
 
   const colsLR = new Set((await p.request().query(
@@ -1041,7 +1049,7 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
   });
   if (!colCodigo || !colCantidad || !colImportePuc) {
     log.warn('fetchRecepcionesDescuentoReal: LineaRecep sin columnas clave (falta importe con impuestos).');
-    return [];
+    return { lineas: [], diagnostico: 'Predictor de descuentos: LineaRecep no tiene columna resuelta de código/cantidad/importe con impuestos — recepciones no disponibles.' };
   }
 
   const colsRec = new Set((await p.request().query(
@@ -1055,7 +1063,10 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
     entidad: 'RECEP', atributo: 'proveedor_id', candidatos: ['XProv_IdProveedor', 'IdProveedor'],
     columnasReales: colsRec, descripcion: 'Columna de Recep con el código del proveedor/distribuidor real de esa recepción (quien vendió la mercancía, puede ser una cooperativa como Cofares o el propio laboratorio).',
   });
-  if (!colFecha) { log.warn('fetchRecepcionesDescuentoReal: Recep sin columna de fecha.'); return []; }
+  if (!colFecha) {
+    log.warn('fetchRecepcionesDescuentoReal: Recep sin columna de fecha.');
+    return { lineas: [], diagnostico: 'Predictor de descuentos: Recep no tiene columna de fecha resuelta — recepciones no disponibles.' };
+  }
 
   // Proveedor: mismas columnas que ya resuelve fetchProductos() para laboratorio_nombre
   // (entidad 'PROVEEDOR') — si ya se resolvió en este mismo sync, esto es un hit de caché.
@@ -1086,7 +1097,7 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
   // Sin precedente en este fichero: si Grupoiva/Tablaiva no existen, o alguna columna no
   // resuelve, se manda piva/preq = null por línea y el servidor descarta esa línea del
   // cálculo de dto_real (no se inventa ningún IVA por defecto).
-  let joinIva = '', selPiva = 'NULL', selPreq = 'NULL';
+  let joinIva = '', selPiva = 'NULL', selPreq = 'NULL', diagnosticoIva = null;
   const tablasIvaR = await p.request().query(`SELECT name FROM sys.tables WHERE name IN ('Grupoiva', 'Tablaiva')`)
     .catch(() => ({ recordset: [] }));
   const tablasIva = new Set(tablasIvaR.recordset.map(r => r.name));
@@ -1135,13 +1146,17 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
       selPreq = `ti.${colPreq}`;
     } else {
       log.warn('fetchRecepcionesDescuentoReal: join Articu→Grupoiva→Tablaiva no resoluble, se omite IVA/RE (piva/preq null).');
+      diagnosticoIva = 'Predictor de descuentos: no se pudo resolver el cruce Articu→Grupoiva→Tablaiva — todas las recepciones se mandan sin IVA/RE, así que el servidor las descarta (motivo "sin_iva") en vez de calcular el descuento real.';
     }
+  } else if (existe.has('Recep') && existe.has('LineaRecep')) {
+    diagnosticoIva = 'Predictor de descuentos: esta instalación no tiene tablas Grupoiva/Tablaiva — todas las recepciones se mandan sin IVA/RE, así que el servidor las descarta (motivo "sin_iva").';
   }
 
   const fechaLim = new Date();
   fechaLim.setDate(fechaLim.getDate() - diasAtras);
   const fechaISO = fechaLim.toISOString().slice(0, 10);
 
+  let diagnosticoQuery = null
   const result = await p.request()
     .input('fecha', sql.Date, fechaISO)
     .query(`
@@ -1162,7 +1177,11 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
       WHERE r.${colFecha} >= @fecha
         AND lr.${colCantidad} > 0
         AND lr.${colCodigo} IS NOT NULL
-    `).catch(err => { log.warn('fetchRecepcionesDescuentoReal falló:', err.message); return { recordset: [] }; });
+    `).catch(err => {
+      log.warn('fetchRecepcionesDescuentoReal falló:', err.message);
+      diagnosticoQuery = `Predictor de descuentos: la consulta de recepciones falló — ${err.message}`;
+      return { recordset: [] };
+    });
 
   const lineas = [];
   for (const r of result.recordset) {
@@ -1188,7 +1207,18 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
     });
   }
   log.info(`fetchRecepcionesDescuentoReal: ${lineas.length} líneas de recepción (${diasAtras} días)`);
-  return lineas;
+  // diagnosticoQuery (la consulta falló del todo) manda solo, es lo más grave. Si no, se
+  // combinan diagnosticoIva (recepciones sí llegan pero sin IVA, se descartarán en el servidor)
+  // y, si encima no llegó NINGUNA línea, una nota de "0 líneas" — puede ser normal (sin compra
+  // directa reciente) pero también la única pista visible de un problema de fecha/columna que
+  // los guardarraíles de arriba no detectaron.
+  const notas = []
+  if (diagnosticoQuery) notas.push(diagnosticoQuery)
+  else {
+    if (diagnosticoIva) notas.push(diagnosticoIva)
+    if (lineas.length === 0) notas.push(`Predictor de descuentos: 0 líneas de recepción en los últimos ${diasAtras} días (puede ser normal si no ha habido pedido directo reciente).`)
+  }
+  return { lineas, diagnostico: notas.length ? notas.join(' ') : null };
 }
 
 // Hermana de fetchRecepcionesRecientes()/fetchRecepcionesDetalle(): aquella colapsa a una
