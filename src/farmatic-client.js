@@ -1461,12 +1461,30 @@ async function fetch4DBDescuentos() {
   const existe = new Set(tablas.recordset.map(r => r.name));
   if (!existe.has('_4DB_CAT_CatalogoArt') || !existe.has('_4DB_CAT_Models')) {
     log.warn('Tablas 4DB no encontradas.');
-    return [];
+    return { registros: [], modelos: [] };
   }
   const catR = await p.request().query(`SELECT MAX(catalogo) AS cat FROM _4DB_CAT_CatalogoArt`);
   const catalogo = catR.recordset[0]?.cat;
-  if (!catalogo) { log.warn('Catálogo 4DB vacío.'); return []; }
+  if (!catalogo) { log.warn('Catálogo 4DB vacío.'); return { registros: [], modelos: [] }; }
   log.info(`4DB: catálogo ${catalogo}`);
+
+  // Diagnóstico (07/09/2026, Auxi Marbella): 'COFARES DIRECTO' es un literal fijo — el nombre
+  // real de _4DB_CAT_Models.nombre en la instalación de jose, donde el match funciona bien
+  // (~29% de genéricos con dto>0 vía 4DB). En Auxi Marbella, laboratorios con Selección
+  // Genéricos real confirmada (CINFA/TEVA/NORMON/KERN, dto real del 30-60% visto vía
+  // LineaRecep) no encuentran NADA por 4DB salvo un laboratorio suelto — indicio fuerte de que
+  // esta instalación usa otro nombre de modelo para el mismo programa. Se reportan los nombres
+  // reales disponibles en este catálogo (con cuántas filas tiene cada uno) para confirmarlo sin
+  // depender del log local antes de tocar el filtro a ciegas.
+  let modelos = [];
+  try {
+    const modelosR = await p.request()
+      .input('catalogo', sql.Int, catalogo)
+      .query(`SELECT nombre, COUNT(*) AS filas FROM _4DB_CAT_Models WHERE catalogo = @catalogo GROUP BY nombre ORDER BY COUNT(*) DESC`);
+    modelos = modelosR.recordset.map(r => ({ nombre: r.nombre, filas: r.filas }));
+  } catch (e) {
+    log.warn('4DB: no se pudo listar los modelos disponibles:', e.message);
+  }
 
   const result = await p.request()
     .input('catalogo', sql.Int, catalogo)
@@ -1486,7 +1504,7 @@ async function fetch4DBDescuentos() {
       WHERE cat.catalogo = @catalogo AND cat.iva = 'S'
     `);
 
-  return result.recordset.map(r => ({
+  const registros = result.recordset.map(r => ({
     codigo_nacional: String(r.cn).trim(),
     pvl_4db:         r.pvl != null ? +Number(r.pvl).toFixed(4) : null,
     cofares_directo: r.dto_cofares != null,
@@ -1497,6 +1515,8 @@ async function fetch4DBDescuentos() {
       return v > 1 ? +(v / 100).toFixed(4) : +v.toFixed(4);
     })(),
   })).filter(r => /^\d{5,}$/.test(r.codigo_nacional));
+
+  return { registros, modelos };
 }
 
 // Módulo Publicitarios (OTC/parafarmacia) — Fase 3.2 del plan. Universo DISJUNTO del de

@@ -528,7 +528,7 @@ async function runSync(opts = {}) {
   // Priority 1: 4DB (Cofares Conecta 4D) — most accurate, normalized to decimal in farmatic-client
   let map4DB = new Map();
   try {
-    const datos4DB = await farmatic.fetch4DBDescuentos();
+    const { registros: datos4DB, modelos } = await farmatic.fetch4DBDescuentos();
     if (datos4DB.length > 0) {
       map4DB = new Map(datos4DB.map(d => [d.codigo_nacional, d]));
       let n4db = 0;
@@ -550,6 +550,20 @@ async function runSync(opts = {}) {
         }
       }
       log.info(`✓ 4DB: ${datos4DB.length} CNs, ${n4db} con dto`);
+      // Diagnóstico (07/09/2026, Auxi Marbella): 'COFARES DIRECTO' es un nombre de modelo fijo
+      // en el código — si esta instalación usa otro nombre para el mismo programa, n4db sale
+      // sospechosamente bajo. Solo se manda warn() (aparece en el panel, no solo en el log
+      // local) cuando pinta mal: 'COFARES DIRECTO' no está entre los modelos de este catálogo,
+      // o tiene muchas menos filas que el modelo más grande — instalaciones donde el nombre sí
+      // coincide (caso normal, ej. jose) no generan ruido en cada sync.
+      const modeloCofaresDirecto = modelos.find(m => m.nombre === 'COFARES DIRECTO')
+      const modeloMasGrande = modelos[0]
+      const pareceDesajustado = modeloMasGrande && (
+        !modeloCofaresDirecto || modeloCofaresDirecto.filas < modeloMasGrande.filas * 0.1
+      )
+      if (pareceDesajustado) {
+        warn(`4DB: 'COFARES DIRECTO' no parece ser el modelo de descuento real de esta instalación (modelos disponibles: ${modelos.map(m => `${m.nombre} (${m.filas})`).join(', ')}) — revisar antes de confiar en el dto de 4DB.`)
+      }
     }
   } catch (e) {
     log.warn('4DB omitido:', e.message);
