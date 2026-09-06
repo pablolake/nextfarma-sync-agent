@@ -16,7 +16,14 @@ async function request(path, { method = 'GET', body } = {}, _retries = 2) {
   if (!base) throw new Error('API_BASE_URL no configurada');
   const headers = { 'Content-Type': 'application/json' };
   if (process.env.API_KEY) headers['X-API-Key'] = process.env.API_KEY;
-  const timeout = parseInt(process.env.API_TIMEOUT_MS, 10) || 30000;
+  // 30s (07/09/2026, bug real en el alta de Auxi Marbella): /api/sync/productos hace 4-8
+  // queries secuenciales por producto (histórico de precio, upsert cns, GP, stock, GH,
+  // laboratorio) — un lote de 500 puede tardar bastante más de 30s en Railway. Al abortar,
+  // el servidor sigue escribiendo en segundo plano (no hay req.on('close') que lo cancele),
+  // así que el lote entero se contaba como "rechazado" en el log/warning aunque casi todo se
+  // hubiera guardado bien — de ahí el aviso falso "7.333 productos rechazados". 180s da margen
+  // real sin cambiar el comportamiento para una API que sí responde rápido.
+  const timeout = parseInt(process.env.API_TIMEOUT_MS, 10) || 180000;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeout);
   try {
