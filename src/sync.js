@@ -556,7 +556,13 @@ async function runSync(opts = {}) {
   // Priority 1: 4DB (Cofares Conecta 4D) — most accurate, normalized to decimal in farmatic-client
   let map4DB = new Map();
   try {
-    const { registros: datos4DB, modelos } = await farmatic.fetch4DBDescuentos();
+    // modeloReceta (07/09/2026, Rincon Abaurre): nombre del modelo de _4DB_CAT_Models que
+    // representa el descuento real de receta, configurable por tenant (farmatic_4db_modelo_
+    // receta en nextfarma-api) en vez de fijo en el código — ver comentario en
+    // fetch4DBDescuentos. 'COFARES DIRECTO' si el tenant no tiene nada configurado todavía.
+    const cfgModelo = await api.obtenerConfigSync();
+    const modeloReceta = cfgModelo.farmatic_4db_modelo_receta || 'COFARES DIRECTO';
+    const { registros: datos4DB, modelos } = await farmatic.fetch4DBDescuentos(modeloReceta);
     if (datos4DB.length > 0) {
       map4DB = new Map(datos4DB.map(d => [d.codigo_nacional, d]));
       let n4db = 0;
@@ -585,20 +591,21 @@ async function runSync(opts = {}) {
           if (d.dto_pct > 0) n4db++;
         }
       }
-      log.info(`✓ 4DB: ${datos4DB.length} CNs, ${n4db} con dto`);
-      // Diagnóstico (07/09/2026, Auxi Marbella): 'COFARES DIRECTO' es un nombre de modelo fijo
-      // en el código — si esta instalación usa otro nombre para el mismo programa, n4db sale
-      // sospechosamente bajo. Solo se manda warn() (aparece en el panel, no solo en el log
-      // local) cuando pinta mal: 'COFARES DIRECTO' no está entre los modelos de este catálogo,
-      // o tiene muchas menos filas que el modelo más grande — instalaciones donde el nombre sí
-      // coincide (caso normal, ej. jose) no generan ruido en cada sync.
-      const modeloCofaresDirecto = modelos.find(m => m.nombre === 'COFARES DIRECTO')
+      log.info(`✓ 4DB: ${datos4DB.length} CNs, ${n4db} con dto (modelo '${modeloReceta}')`);
+      // Diagnóstico (07/09/2026, Auxi Marbella/Rincon Abaurre): compara contra el modelo YA
+      // CONFIGURADO (modeloReceta, no un literal fijo) — así, en cuanto se confirme y se fije
+      // el nombre correcto por tenant (farmatic_4db_modelo_receta), este aviso deja de saltar
+      // solo. Solo se manda warn() (aparece en el panel, no solo en el log local) cuando pinta
+      // mal: el modelo configurado no está entre los disponibles, o tiene muchas menos filas
+      // que el más grande — instalaciones donde ya coincide (caso normal, ej. jose) no generan
+      // ruido en cada sync.
+      const modeloConfigurado = modelos.find(m => m.nombre === modeloReceta)
       const modeloMasGrande = modelos[0]
       const pareceDesajustado = modeloMasGrande && (
-        !modeloCofaresDirecto || modeloCofaresDirecto.filas < modeloMasGrande.filas * 0.1
+        !modeloConfigurado || modeloConfigurado.filas < modeloMasGrande.filas * 0.1
       )
       if (pareceDesajustado) {
-        warn(`4DB: 'COFARES DIRECTO' no parece ser el modelo de descuento real de esta instalación (modelos disponibles: ${modelos.map(m => `${m.nombre} (${m.filas})`).join(', ')}) — revisar antes de confiar en el dto de 4DB.`)
+        warn(`4DB: '${modeloReceta}' no parece ser el modelo de descuento real de esta instalación (modelos disponibles: ${modelos.map(m => `${m.nombre} (${m.filas})`).join(', ')}) — revisar antes de confiar en el dto de 4DB.`)
       }
     }
   } catch (e) {

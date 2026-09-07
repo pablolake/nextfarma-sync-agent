@@ -1453,7 +1453,7 @@ async function verificarTablas() {
   };
 }
 
-async function fetch4DBDescuentos() {
+async function fetch4DBDescuentos(modeloReceta) {
   const p = await getPool();
   const tablas = await p.request().query(
     `SELECT name FROM sys.tables WHERE name IN ('_4DB_CAT_CatalogoArt', '_4DB_CAT_Models')`
@@ -1496,8 +1496,16 @@ async function fetch4DBDescuentos() {
   // separado (no se mezclan/priorizan aquí — cada uno es un canal de compra distinto con su
   // propia fórmula de precio, PVL vs PVF) y se manda dto_nexo aparte para que el servidor
   // decida, igual que ya hace con pcDirecto/ccPct en calcMU.
+  //
+  // modeloReceta (07/09/2026, Rincon Abaurre): 'COFARES DIRECTO' era un literal fijo aquí
+  // mismo — cada instalación nueva con un nombre de modelo distinto exigía subir versión del
+  // agente para poder leerlo. Ahora es un parámetro (config del tenant, ver
+  // farmatic_4db_modelo_receta en nextfarma-api, leída en sync.js vía obtenerConfigSync) con
+  // 'COFARES DIRECTO' como valor por defecto — mismo comportamiento de siempre para cualquier
+  // tenant sin configurar explícitamente.
   const result = await p.request()
     .input('catalogo', sql.Int, catalogo)
+    .input('modeloReceta', sql.VarChar, modeloReceta || 'COFARES DIRECTO')
     .query(`
       SELECT
         LTRIM(RTRIM(CAST(cat.codigoNacional AS VARCHAR))) AS cn,
@@ -1510,7 +1518,7 @@ async function fetch4DBDescuentos() {
         SELECT codigonacional, MAX(discount) AS discount
         FROM _4DB_CAT_Models
         WHERE catalogo = @catalogo
-          AND nombre = 'COFARES DIRECTO'
+          AND nombre = @modeloReceta
         GROUP BY codigonacional
       ) cd ON cd.codigonacional = cat.codigoNacional
       LEFT JOIN (
