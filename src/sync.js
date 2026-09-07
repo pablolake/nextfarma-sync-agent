@@ -574,6 +574,14 @@ async function runSync(opts = {}) {
           if (d.cofares_directo && prod.pvl != null) {
             prod.pc_cofares = +(prod.pvl * (1 - (d.dto_pct || 0))).toFixed(4);
           }
+          // NEXO (07/09/2026, ver comentario en fetch4DBDescuentos) — canal de compra
+          // independiente de COFARES DIRECTO, con su propia fórmula de precio (PVF real del
+          // propio modelo, no PVL). Se manda el dto y el pvf crudos; el servidor decide el
+          // candidato de coste con esos datos, igual que ya hace con pcDirecto/ccPct.
+          if (d.dto_nexo != null && d.dto_nexo > 0) {
+            prod.dto_nexo = d.dto_nexo;
+            prod.pvf_nexo = d.pvf_nexo || null;
+          }
           if (d.dto_pct > 0) n4db++;
         }
       }

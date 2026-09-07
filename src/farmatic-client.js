@@ -1486,13 +1486,25 @@ async function fetch4DBDescuentos() {
     log.warn('4DB: no se pudo listar los modelos disponibles:', e.message);
   }
 
+  // NEXO (07/09/2026, confirmado con datos reales de Auxi Marbella vía el diagnóstico de
+  // arriba): 'COFARES DIRECTO' no es el único modelo real de descuento genérico en
+  // _4DB_CAT_Models — 'NEXO' es un programa de Cofares distinto y ya conocido (PVF + descuento
+  // de nexo, ver tipo MejorCanal/COFARES_NEXO en nextfarma-api, hasta ahora sin ningún dato
+  // real detrás) que en esta instalación concreta es el DOMINANTE (13.446 filas de NEXO frente
+  // a solo 633 de COFARES DIRECTO) — los laboratorios de Selección Genéricos real (CINFA/TEVA/
+  // NORMON/KERN) que no aparecían por COFARES DIRECTO están aquí. Se leen ambos modelos por
+  // separado (no se mezclan/priorizan aquí — cada uno es un canal de compra distinto con su
+  // propia fórmula de precio, PVL vs PVF) y se manda dto_nexo aparte para que el servidor
+  // decida, igual que ya hace con pcDirecto/ccPct en calcMU.
   const result = await p.request()
     .input('catalogo', sql.Int, catalogo)
     .query(`
       SELECT
         LTRIM(RTRIM(CAST(cat.codigoNacional AS VARCHAR))) AS cn,
         cat.pvl,
-        cd.discount AS dto_cofares
+        cd.discount AS dto_cofares,
+        nx.discount AS dto_nexo,
+        nx.pvf      AS pvf_nexo
       FROM _4DB_CAT_CatalogoArt cat
       LEFT JOIN (
         SELECT codigonacional, MAX(discount) AS discount
@@ -1501,19 +1513,34 @@ async function fetch4DBDescuentos() {
           AND nombre = 'COFARES DIRECTO'
         GROUP BY codigonacional
       ) cd ON cd.codigonacional = cat.codigoNacional
+      LEFT JOIN (
+        -- pvf real del propio modelo NEXO (no cat.pvl) — Nexo es PVF + descuento, un canal de
+        -- compra distinto con precio base propio, no el PVL de la ficha general del artículo.
+        SELECT m.codigonacional, MAX(m.discount) AS discount,
+               MAX(m.pvf) AS pvf
+        FROM _4DB_CAT_Models m
+        WHERE m.catalogo = @catalogo
+          AND m.nombre = 'NEXO'
+        GROUP BY m.codigonacional
+      ) nx ON nx.codigonacional = cat.codigoNacional
       WHERE cat.catalogo = @catalogo AND cat.iva = 'S'
     `);
+
+  const normalizaDto = v => {
+    if (v == null) return null;
+    const n = +Number(v);
+    if (n <= 0) return 0;
+    // 4DB can store as % (5) or decimal (0.05) — normalize to decimal
+    return n > 1 ? +(n / 100).toFixed(4) : +n.toFixed(4);
+  };
 
   const registros = result.recordset.map(r => ({
     codigo_nacional: String(r.cn).trim(),
     pvl_4db:         r.pvl != null ? +Number(r.pvl).toFixed(4) : null,
     cofares_directo: r.dto_cofares != null,
-    dto_pct:         (() => {
-      const v = r.dto_cofares != null ? +Number(r.dto_cofares) : 0;
-      if (v <= 0) return 0;
-      // 4DB can store as % (5) or decimal (0.05) — normalize to decimal
-      return v > 1 ? +(v / 100).toFixed(4) : +v.toFixed(4);
-    })(),
+    dto_pct:         normalizaDto(r.dto_cofares) || 0,
+    dto_nexo:        normalizaDto(r.dto_nexo),
+    pvf_nexo:        r.pvf_nexo != null ? +Number(r.pvf_nexo).toFixed(4) : null,
   })).filter(r => /^\d{5,}$/.test(r.codigo_nacional));
 
   return { registros, modelos };
