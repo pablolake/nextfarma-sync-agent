@@ -1229,10 +1229,6 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
       entidad: 'GRUPOIVA', atributo: 'id', candidatos: ['IdGrupoIva'],
       columnasReales: colsGrupoiva, descripcion: 'Columna de Grupoiva con su código/clave primaria (la misma que referencia Articu).',
     });
-    const colGrupoivaTipo = await resolverAtributoColumna({
-      entidad: 'GRUPOIVA', atributo: 'tipo', candidatos: ['Tipo'],
-      columnasReales: colsGrupoiva, descripcion: 'Columna de Grupoiva con el tipo de IVA (valores A/C/P) que se cruza después con Tablaiva.',
-    });
     const colTablaivaTipoArt = await resolverAtributoColumna({
       entidad: 'TABLAIVA', atributo: 'tipo_articulo', candidatos: ['IdTipoArt', 'IdTipo', 'Tipo'],
       columnasReales: colsTablaiva,
@@ -1247,18 +1243,21 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
       columnasReales: colsTablaiva, descripcion: 'Columna de Tablaiva con el porcentaje de recargo de equivalencia (float, p.ej. 0.5, 1.75, 5.2).',
     });
 
-    if (colArticuGrupoIva && colGrupoivaId && colGrupoivaTipo && colTablaivaTipoArt && colPiva && colPreq) {
-      // BUG real (07/09/2026, encontrado auditando por qué piva/preq salía NULL en el 100% de
-      // las líneas de las 5 farmacias, en TODOS los canales, no solo receta): estas 4 columnas
-      // son CHAR de ancho fijo en Farmatic (confirmado vía farmatic_schema_info.tablas_completo)
-      // — comparar CHAR sin LTRIM/RTRIM es el mismo problema de relleno de espacios que ya se
-      // trata en cualquier otro cruce de este fichero (ver comentarios de fetchRecepcionesDetalle
-      // más arriba), pero este cruce en concreto se quedó sin ese tratamiento. El resultado real:
-      // el JOIN nunca matcheaba ninguna fila, así que el predictor de descuentos (Fase 1) lleva
-      // meses capturando recepciones sin poder calcular NUNCA un dto_real, en ningún tenant.
+    if (colArticuGrupoIva && colGrupoivaId && colTablaivaTipoArt && colPiva && colPreq) {
+      // BUG real (08/09/2026, encontrado auditando con datos reales de farmacia jose por qué
+      // piva/preq salía NULL en el 100% de las líneas de las 5 farmacias, en TODOS los canales,
+      // no solo receta — el intento de arreglo del 07/09 con LTRIM/RTRIM era inofensivo pero no
+      // tocaba la causa real, comprobado con valores reales sin ningún relleno de espacios):
+      // Grupoiva.Tipo vale 'A'/'C'/'P' (Artículo/Cliente/Proveedor — a qué tabla de Tablaiva
+      // pertenece cada IVA), NUNCA los códigos '01'/'02'/'03'/'04' de Tablaiva.IdTipoArt — son
+      // dominios de valores completamente distintos, el JOIN contra gi.Tipo no podía matchear
+      // JAMÁS. El código real que sí coincide 1:1 con Tablaiva.IdTipoArt es Grupoiva.IdGrupoIva
+      // (confirmado con 3 casos reales de jose: '01'→Exento/0%, '02'→4% IVA, '04'→21% IVA) — el
+      // propio Tipo de Grupoiva ya sirvió para resolver qué columna de Tablaiva usar (IdTipoArt,
+      // vía colTablaivaTipoArt más abajo), no hace falta cruzarlo de nuevo aquí.
       joinIva = `
         LEFT JOIN Grupoiva gi ON LTRIM(RTRIM(gi.${colGrupoivaId})) = LTRIM(RTRIM(a.${colArticuGrupoIva}))
-        LEFT JOIN Tablaiva ti ON LTRIM(RTRIM(ti.${colTablaivaTipoArt})) = LTRIM(RTRIM(gi.${colGrupoivaTipo}))`;
+        LEFT JOIN Tablaiva ti ON LTRIM(RTRIM(ti.${colTablaivaTipoArt})) = LTRIM(RTRIM(gi.${colGrupoivaId}))`;
       selPiva = `ti.${colPiva}`;
       selPreq = `ti.${colPreq}`;
     } else {
