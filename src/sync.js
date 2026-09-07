@@ -228,6 +228,25 @@ async function runSync(opts = {}) {
     log.warn('Barrido de esquema omitido:', e.message);
   }
 
+  // Diagnóstico genérico de tabla (07/09/2026) — peticiones "N filas de la tabla X" encoladas
+  // desde el panel (farmatic_diagnostico_tabla), sin necesidad de código/versión nueva para
+  // cada tabla que haga falta inspeccionar. La tabla puede estar bloqueada (nombre/columnas de
+  // cliente/paciente, ver esTablaSegura en farmatic-client.js) — se reporta el motivo igual,
+  // para que quede constancia de que se pidió y por qué se rechazó, no se ignora en silencio.
+  try {
+    const pendientesDiagnostico = await api.obtenerDiagnosticoTablaPendiente();
+    for (const pet of pendientesDiagnostico) {
+      try {
+        const resultado = await farmatic.ejecutarDiagnosticoTablaGenerico(pet.tabla, pet.limite);
+        await api.enviarResultadoDiagnosticoTabla(pet.id, resultado);
+      } catch (e) {
+        await api.enviarResultadoDiagnosticoTabla(pet.id, { error: e.message });
+      }
+    }
+  } catch (e) {
+    log.warn('Diagnóstico genérico de tabla omitido:', e.message);
+  }
+
   // ── Fase A: favoritos reales + creación de listas ────────────────────
   // Lo primero que se intenta (antes de leer/subir nada de ventas): detectar el favorito
   // real de cada GH (7 listas si están configuradas, o la lista única de favoritos por

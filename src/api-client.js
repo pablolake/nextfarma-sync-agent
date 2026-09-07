@@ -226,6 +226,24 @@ async function enviarSchemaInfo(schema) {
   }
 }
 
+async function obtenerDiagnosticoTablaPendiente() {
+  try {
+    const r = await request('/api/sync/diagnostico-tabla-pendiente');
+    return r.pendientes || [];
+  } catch (err) {
+    log.warn('obtenerDiagnosticoTablaPendiente falló:', err.message);
+    return [];
+  }
+}
+
+async function enviarResultadoDiagnosticoTabla(id, resultado) {
+  try {
+    await request('/api/sync/diagnostico-tabla', { method: 'POST', body: { id, ...resultado } });
+  } catch (err) {
+    log.warn('enviarResultadoDiagnosticoTabla falló:', err.message);
+  }
+}
+
 async function reportarCoberturaCatalogo(cobertura) {
   try {
     return await request('/api/sync/cobertura-catalogo', { method: 'POST', body: cobertura });
@@ -449,6 +467,8 @@ module.exports = {
   getVendedoresPendientes,
   marcarVendedoresPendientesProcesados,
   enviarSchemaInfo,
+  obtenerDiagnosticoTablaPendiente,
+  enviarResultadoDiagnosticoTabla,
   reportarCoberturaCatalogo,
   obtenerConfigSync,
   obtenerCategoriasActuales,

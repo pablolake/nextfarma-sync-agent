@@ -3425,6 +3425,61 @@ async function runDiagnostic(key) {
   }
 }
 
+// ── Diagnóstico genérico de tabla (07/09/2026) ──────────────────────────────────
+// DIAGNOSTIC_QUERIES de arriba exige escribir código nuevo (y subir versión) por cada tabla
+// que haga falta inspeccionar — el mismo ciclo lento que hoy nos ha tenido varias horas
+// esperando a que Auxi Marbella actualizara para ver _4DB_CAT_Models/ListaArticu reales. Esto
+// permite pedir "N filas de la tabla X" desde el panel (farmatic_diagnostico_tabla en
+// nextfarma-api) sin tocar este archivo — el límite de qué tablas NUNCA se pueden leer así
+// vive AQUÍ, en el agente, no solo como política del lado del servidor: aunque el panel (o
+// quien sea) pida una tabla de clientes/pacientes por error o mala intención, el agente se
+// niega él mismo. Dos capas: nombre de tabla obviamente de cliente/paciente, y columnas que
+// delatan datos de paciente aunque el nombre de la tabla no lo sugiera (caso real visto hoy:
+// "LineaRE" en Auxi Marbella no suena a nada especial, pero tiene NombrePaciente/CIP/Firmada).
+const TABLAS_PROHIBIDAS_NOMBRE = /cliente|paciente/i;
+const COLUMNAS_PROHIBIDAS = [
+  'nombrepaciente', 'apellidospaciente', 'cip', 'dni', 'nif',
+  'fechanacimiento', 'historiaclinica', 'numcolegiado',
+];
+
+async function esTablaSegura(p, tabla) {
+  if (TABLAS_PROHIBIDAS_NOMBRE.test(tabla)) {
+    return { segura: false, motivo: `nombre de tabla sugiere datos de cliente/paciente ("${tabla}")` };
+  }
+  const colsR = await p.request().query(
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${tabla}'`
+  ).catch(() => ({ recordset: [] }));
+  const columnas = colsR.recordset.map(r => String(r.COLUMN_NAME).toLowerCase());
+  const columnaProhibida = columnas.find(c => COLUMNAS_PROHIBIDAS.some(p2 => c.includes(p2)));
+  if (columnaProhibida) {
+    return { segura: false, motivo: `columna "${columnaProhibida}" sugiere datos de paciente` };
+  }
+  return { segura: true };
+}
+
+async function ejecutarDiagnosticoTablaGenerico(tabla, limite) {
+  if (typeof tabla !== 'string' || !/^[A-Za-z0-9_]+$/.test(tabla)) {
+    return { ok: false, rechazado_motivo: 'nombre de tabla inválido' };
+  }
+  const limiteSeguro = Math.min(Math.max(parseInt(limite, 10) || 20, 1), 50);
+  const p = await getPool();
+
+  const existe = await p.request().query(
+    `SELECT name FROM sys.tables WHERE name = '${tabla}'`
+  ).catch(() => ({ recordset: [] }));
+  if (!existe.recordset.length) {
+    return { ok: false, rechazado_motivo: `la tabla "${tabla}" no existe en esta instalación` };
+  }
+
+  const seguridad = await esTablaSegura(p, tabla);
+  if (!seguridad.segura) {
+    return { ok: false, rechazado_motivo: `bloqueada: ${seguridad.motivo}` };
+  }
+
+  const r = await p.request().query(`SELECT TOP ${limiteSeguro} * FROM [${tabla}]`);
+  return { ok: true, rows: r.recordset };
+}
+
 async function fetchRGPDCount(opcion) {
   const p = await getPool();
   const r = await p.request().query(
@@ -3493,6 +3548,7 @@ module.exports = {
   fetchLabsWizard,
   fetchListasWizard,
   fetchListaCofaresDirectoCns,
+  ejecutarDiagnosticoTablaGenerico,
   fetchRGPDCount,
   fetchRGPDDistribucion,
   runDiagnostic,
