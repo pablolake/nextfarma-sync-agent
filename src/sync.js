@@ -745,7 +745,9 @@ async function runSync(opts = {}) {
   if (todasVentas.length > 0) {
     step('env-ven', 'Enviando ventas a NextFarma…', 'running');
     try {
-      const r = await api.enviarVentas(todasVentas);
+      const r = await api.enviarVentas(todasVentas, (lote, totalLotes) => {
+        step('env-ven', `Enviando ventas a NextFarma… (lote ${lote}/${totalLotes})`, 'running');
+      });
       ok(`Ventas: ${r.upserts} actualizadas${r.errors > 0 ? `, ${r.errors} errores` : ''}`);
       step('env-ven', `Ventas: ${r.upserts} registros enviados`, r.errors > 0 ? 'warn' : 'ok');
     } catch (e) {
@@ -780,41 +782,67 @@ async function runSync(opts = {}) {
     log.warn('Ventas anuales omitidas:', e.message);
   }
 
+  // 07/09/2026 (Auxi Marbella, Rincon Abaurre): estos 4 envíos nunca tenían su propio step(),
+  // así que mientras corrían (pueden ser cientos de lotes con histórico grande) el panel
+  // seguía mostrando el último paso ya reportado, sin ningún indicio de que hubiera algo en
+  // curso — un envío realmente largo (o con lotes fallando y reintentando) era indistinguible
+  // de un sync colgado. Mismo patrón ya aplicado a catálogo/ventas: step() propio + progreso
+  // por lote.
   if (recepciones.length > 0) {
+    step('env-recep', 'Enviando recepciones a NextFarma…', 'running');
     try {
-      const r = await api.enviarRecepciones(recepciones);
+      const r = await api.enviarRecepciones(recepciones, (lote, totalLotes) => {
+        step('env-recep', `Enviando recepciones a NextFarma… (lote ${lote}/${totalLotes})`, 'running');
+      });
       log.info(`✓ Recepciones: ${r.upserts} productos con precio real de albarán`);
+      step('env-recep', `Recepciones: ${r.upserts} productos actualizados`, r.errors > 0 ? 'warn' : 'ok');
     } catch (e) {
       log.warn('Error enviando recepciones:', e.message);
+      step('env-recep', 'Error enviando recepciones: ' + e.message, 'error');
     }
   } else {
     log.info('Recepciones: sin datos o tablas no disponibles.');
   }
 
   if (recepcionesDetalle.length > 0) {
+    step('env-recep-detalle', 'Enviando detalle de recepciones a NextFarma…', 'running');
     try {
-      const r = await api.enviarRecepcionesDetalle(recepcionesDetalle);
+      const r = await api.enviarRecepcionesDetalle(recepcionesDetalle, (lote, totalLotes) => {
+        step('env-recep-detalle', `Enviando detalle de recepciones a NextFarma… (lote ${lote}/${totalLotes})`, 'running');
+      });
       log.info(`✓ Recepciones (detalle): ${r.upserts} líneas procesadas`);
+      step('env-recep-detalle', `Recepciones (detalle): ${r.upserts} líneas procesadas`, r.errors > 0 ? 'warn' : 'ok');
     } catch (e) {
       log.warn('Error enviando recepciones (detalle):', e.message);
+      step('env-recep-detalle', 'Error enviando detalle de recepciones: ' + e.message, 'error');
     }
   }
 
   if (recepcionesDescuentoReal.length > 0) {
+    step('env-recep-dto', 'Enviando predictor de descuentos a NextFarma…', 'running');
     try {
-      const r = await api.enviarRecepcionesDescuentoReal(recepcionesDescuentoReal);
+      const r = await api.enviarRecepcionesDescuentoReal(recepcionesDescuentoReal, (lote, totalLotes) => {
+        step('env-recep-dto', `Enviando predictor de descuentos a NextFarma… (lote ${lote}/${totalLotes})`, 'running');
+      });
       log.info(`✓ Predictor de descuentos: ${r.guardados} líneas guardadas, ${r.descartados} descartadas por el servidor`);
+      step('env-recep-dto', `Predictor de descuentos: ${r.guardados} líneas guardadas`, r.errors > 0 ? 'warn' : 'ok');
     } catch (e) {
       log.warn('Error enviando recepciones (descuento real):', e.message);
+      step('env-recep-dto', 'Error enviando predictor de descuentos: ' + e.message, 'error');
     }
   }
 
   if (comprasMensuales.length > 0) {
+    step('env-compras', 'Enviando compras mensuales a NextFarma…', 'running');
     try {
-      const r = await api.enviarComprasMensuales(comprasMensuales);
+      const r = await api.enviarComprasMensuales(comprasMensuales, (lote, totalLotes) => {
+        step('env-compras', `Enviando compras mensuales a NextFarma… (lote ${lote}/${totalLotes})`, 'running');
+      });
       log.info(`✓ Compras mensuales: ${r.upserts} líneas procesadas`);
+      step('env-compras', `Compras mensuales: ${r.upserts} líneas procesadas`, r.errors > 0 ? 'warn' : 'ok');
     } catch (e) {
       log.warn('Error enviando compras mensuales:', e.message);
+      step('env-compras', 'Error enviando compras mensuales: ' + e.message, 'error');
     }
   }
 

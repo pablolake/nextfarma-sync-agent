@@ -85,13 +85,20 @@ async function enviarProductos(productos, onLote) {
   return totals;
 }
 
-async function enviarVentas(ventas) {
+async function enviarVentas(ventas, onLote) {
   const batchSize = parseInt(process.env.BATCH_SIZE, 10) || 500;
   const batches   = chunk(ventas, batchSize);
   const totals    = { total: 0, upserts: 0, errors: 0 };
   for (let i = 0; i < batches.length; i++) {
     if (abortRequested) { log.warn(`Envío de ventas cancelado (${i}/${batches.length} lotes enviados)`); throw new SyncAbortedError(); }
     log.info(`Enviando lote ventas ${i + 1}/${batches.length} (${batches[i].length})...`);
+    // Mismo motivo que enviarProductos (ver comentario ahí, 30/08/2026 farma-jose): sin este
+    // aviso por lote, un envío de ventas grande (decenas de miles de registros → cientos de
+    // lotes) es indistinguible desde el panel de un sync realmente colgado — "running" fijo
+    // desde el principio hasta el final. Confirmado real el 07/09/2026 (Auxi Marbella, Rincon
+    // Abaurre): ambas parecían atascadas >15-20 min en "Enviando ventas" sin ningún dato de
+    // avance, cuando en realidad seguían progresando lote a lote.
+    if (onLote) onLote(i + 1, batches.length);
     try {
       const r = await request('/api/sync/ventas', { method: 'POST', body: { ventas: batches[i] } });
       totals.total += r.total; totals.upserts += r.upserts; totals.errors += r.errors;
@@ -103,13 +110,14 @@ async function enviarVentas(ventas) {
   return totals;
 }
 
-async function enviarRecepciones(recepciones) {
+async function enviarRecepciones(recepciones, onLote) {
   const batchSize = parseInt(process.env.BATCH_SIZE, 10) || 500;
   const batches   = chunk(recepciones, batchSize);
   const totals    = { total: 0, upserts: 0, errors: 0 };
   for (let i = 0; i < batches.length; i++) {
     if (abortRequested) { log.warn(`Envío de recepciones cancelado (${i}/${batches.length} lotes enviados)`); throw new SyncAbortedError(); }
     log.info(`Enviando lote recepciones ${i + 1}/${batches.length} (${batches[i].length})...`);
+    if (onLote) onLote(i + 1, batches.length);
     try {
       const r = await request('/api/sync/recepciones', { method: 'POST', body: { recepciones: batches[i] } });
       totals.total += r.total; totals.upserts += r.upserts; totals.errors += r.errors;
@@ -125,13 +133,14 @@ async function enviarRecepciones(recepciones) {
 // histórica de favorito) — distinto de enviarRecepciones()/enviarRecepcionesDetalle()
 // (precio más reciente / detalle de 45 días): esto manda cuánto se recibió de cada CN cada
 // mes durante los últimos 24 meses, la señal de "recepción confirma" del algoritmo.
-async function enviarComprasMensuales(compras) {
+async function enviarComprasMensuales(compras, onLote) {
   const batchSize = parseInt(process.env.BATCH_SIZE, 10) || 500;
   const batches    = chunk(compras, batchSize);
   const totals     = { total: 0, upserts: 0, errors: 0 };
   for (let i = 0; i < batches.length; i++) {
     if (abortRequested) { log.warn(`Envío de compras mensuales cancelado (${i}/${batches.length} lotes enviados)`); throw new SyncAbortedError(); }
     log.info(`Enviando lote compras-mensuales ${i + 1}/${batches.length} (${batches[i].length})...`);
+    if (onLote) onLote(i + 1, batches.length);
     try {
       const r = await request('/api/sync/compras-mensuales', { method: 'POST', body: { compras: batches[i] } });
       totals.total += r.total; totals.upserts += r.upserts; totals.errors += r.errors;
@@ -147,13 +156,14 @@ async function enviarComprasMensuales(compras) {
 // enviarRecepciones() (que solo manda el precio real más reciente por CN para cns.pc): esto
 // manda cada línea de albarán tal cual, para que el backend pueda cerrar automáticamente la
 // fase "Recibido" de un pedido cuando detecta que ya llegó.
-async function enviarRecepcionesDetalle(lineas) {
+async function enviarRecepcionesDetalle(lineas, onLote) {
   const batchSize = parseInt(process.env.BATCH_SIZE, 10) || 500;
   const batches    = chunk(lineas, batchSize);
   const totals     = { total: 0, upserts: 0, errors: 0 };
   for (let i = 0; i < batches.length; i++) {
     if (abortRequested) { log.warn(`Envío de recepciones (detalle) cancelado (${i}/${batches.length} lotes enviados)`); throw new SyncAbortedError(); }
     log.info(`Enviando lote recepciones-detalle ${i + 1}/${batches.length} (${batches[i].length})...`);
+    if (onLote) onLote(i + 1, batches.length);
     try {
       const r = await request('/api/sync/recepciones-detalle', { method: 'POST', body: { lineas: batches[i] } });
       totals.total += r.total; totals.upserts += r.upserts; totals.errors += r.errors;
@@ -188,13 +198,14 @@ async function enviarMiembrosListasCategoria(miembros) {
 // farmatic-client.js. El servidor decide scope/guardarraíl/cálculo de dto_real; el agente
 // solo manda la señal cruda por línea. Ventana de 90 días sobre todo el catálogo — igual de
 // grande o más que recepciones-detalle, mismo troceo en lotes.
-async function enviarRecepcionesDescuentoReal(lineas) {
+async function enviarRecepcionesDescuentoReal(lineas, onLote) {
   const batchSize = parseInt(process.env.BATCH_SIZE, 10) || 500;
   const batches    = chunk(lineas, batchSize);
   const totals     = { total: 0, guardados: 0, descartados: 0, errors: 0 };
   for (let i = 0; i < batches.length; i++) {
     if (abortRequested) { log.warn(`Envío de recepciones (descuento real) cancelado (${i}/${batches.length} lotes enviados)`); throw new SyncAbortedError(); }
     log.info(`Enviando lote recepciones-descuento-real ${i + 1}/${batches.length} (${batches[i].length})...`);
+    if (onLote) onLote(i + 1, batches.length);
     try {
       const r = await request('/api/sync/recepciones-descuento-real', { method: 'POST', body: { lineas: batches[i] } });
       totals.total += r.total || 0; totals.guardados += r.guardados || 0; totals.descartados += r.descartados || 0;
