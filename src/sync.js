@@ -237,7 +237,7 @@ async function runSync(opts = {}) {
     const pendientesDiagnostico = await api.obtenerDiagnosticoTablaPendiente();
     for (const pet of pendientesDiagnostico) {
       try {
-        const resultado = await farmatic.ejecutarDiagnosticoTablaGenerico(pet.tabla, pet.limite);
+        const resultado = await farmatic.ejecutarDiagnosticoTablaGenerico(pet.tabla, pet.limite, pet.spec);
         await api.enviarResultadoDiagnosticoTabla(pet.id, resultado);
       } catch (e) {
         await api.enviarResultadoDiagnosticoTabla(pet.id, { error: e.message });

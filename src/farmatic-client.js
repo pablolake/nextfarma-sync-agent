@@ -3550,11 +3550,97 @@ async function esTablaSegura(p, tabla) {
   return { segura: true };
 }
 
-async function ejecutarDiagnosticoTablaGenerico(tabla, limite) {
+// Identificador SQL Server válido — mismo alfabeto que ya exige el backend (ver
+// validarQuerySpec en nextfarma-api/src/index.ts). Nunca se confía en que el backend ya
+// validó esto — el agente vuelve a comprobarlo todo por su cuenta antes de construir SQL.
+const IDENTIFICADOR_SQL_AGENTE = /^[A-Za-z0-9_]+$/;
+const OPERADORES_WHERE = { '=': '=', '!=': '<>', '>': '>', '>=': '>=', '<': '<', '<=': '<=' };
+const FUNCIONES_AGREGADO = new Set(['SUM', 'AVG', 'MAX', 'MIN', 'COUNT']);
+
+// query genérica (07/09/2026) — extensión de spec sobre farmatic_diagnostico_tabla: en vez de
+// "las primeras N filas sin filtrar" (lo único que se podía pedir hasta hoy), permite columnas
+// concretas + WHERE + GROUP BY + agregados sobre UNA tabla — sin joins todavía (ver nota en
+// nextfarma-api/src/index.ts, validarQuerySpec). Pensado para el caso real que lo motivó:
+// _4DB_CAT_Models mezcla varios modelos (NEXO/PROMOCIONES/BONIFICACIONES/COFARES DIRECTO) en
+// la misma tabla — "las primeras 50 filas sin filtrar" siempre devuelve el modelo más grande
+// (NEXO, 13446 filas en Auxi), nunca deja ver los demás. Con spec: WHERE nombre='BONIFICACIONES'
+// resuelve esto sin escribir una función dedicada ni subir versión cada vez que haga falta
+// mirar un modelo distinto.
+async function ejecutarQueryGenerica(p, tabla, spec, limiteSeguro) {
+  if (!Array.isArray(spec.columnas) || !spec.columnas.length || !spec.columnas.every(c => IDENTIFICADOR_SQL_AGENTE.test(c))) {
+    return { ok: false, rechazado_motivo: 'spec.columnas inválidas' };
+  }
+  if (spec.joins != null) {
+    return { ok: false, rechazado_motivo: 'spec.joins todavía no soportado en esta versión del agente' };
+  }
+  const colsTabla = new Set((await p.request().query(
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${tabla}'`
+  )).recordset.map(c => String(c.COLUMN_NAME)));
+
+  // Todas las columnas referenciadas en CUALQUIER parte del spec (select/where/groupBy/
+  // agregados/orderBy) — cada una debe (a) existir de verdad en la tabla y (b) pasar el mismo
+  // filtro de columnas prohibidas que ya usa esTablaSegura, palabra completa no subcadena.
+  const columnasReferenciadas = new Set([
+    ...spec.columnas,
+    ...(spec.where || []).map(w => w.campo),
+    ...(spec.groupBy || []),
+    ...(spec.agregados || []).map(a => a.campo),
+    ...(spec.orderBy || []).map(o => o.campo),
+  ]);
+  for (const col of columnasReferenciadas) {
+    if (!IDENTIFICADOR_SQL_AGENTE.test(col)) return { ok: false, rechazado_motivo: `columna inválida: ${col}` };
+    if (!colsTabla.has(col)) return { ok: false, rechazado_motivo: `la columna "${col}" no existe en ${tabla}` };
+    if (palabrasDeColumna(col).some(tok => COLUMNAS_PROHIBIDAS.includes(tok))) {
+      return { ok: false, rechazado_motivo: `bloqueada: columna "${col}" sugiere datos de paciente` };
+    }
+  }
+
+  const selectPartes = [...spec.columnas];
+  if (spec.agregados) {
+    for (const a of spec.agregados) {
+      if (!FUNCIONES_AGREGADO.has(a.fn) || !IDENTIFICADOR_SQL_AGENTE.test(a.alias)) return { ok: false, rechazado_motivo: 'agregado inválido' };
+      selectPartes.push(`${a.fn}(${a.campo}) AS ${a.alias}`);
+    }
+  }
+
+  const request = p.request();
+  const wherePartes = [];
+  if (spec.where) {
+    spec.where.forEach((w, i) => {
+      if (w.operador === 'IN') {
+        if (!Array.isArray(w.valor) || !w.valor.length) return;
+        const nombres = w.valor.map((v, j) => {
+          const param = `w${i}_${j}`;
+          request.input(param, typeof v === 'number' ? sql.Float : sql.VarChar, v);
+          return `@${param}`;
+        });
+        wherePartes.push(`${w.campo} IN (${nombres.join(', ')})`);
+      } else if (w.valor === '$NOW') {
+        wherePartes.push(`${w.campo} ${OPERADORES_WHERE[w.operador] || '='} GETDATE()`);
+      } else {
+        const param = `w${i}`;
+        request.input(param, typeof w.valor === 'number' ? sql.Float : sql.VarChar, w.valor);
+        wherePartes.push(`${w.campo} ${OPERADORES_WHERE[w.operador] || '='} @${param}`);
+      }
+    });
+  }
+
+  const sqlPartes = [
+    `SELECT TOP ${limiteSeguro} ${selectPartes.join(', ')} FROM [${tabla}]`,
+    wherePartes.length ? `WHERE ${wherePartes.join(' AND ')}` : '',
+    spec.groupBy?.length ? `GROUP BY ${spec.groupBy.join(', ')}` : '',
+    spec.orderBy?.length ? `ORDER BY ${spec.orderBy.map(o => `${o.campo} ${o.dir === 'DESC' ? 'DESC' : 'ASC'}`).join(', ')}` : '',
+  ].filter(Boolean);
+
+  const r = await request.query(sqlPartes.join('\n'));
+  return { ok: true, rows: r.recordset };
+}
+
+async function ejecutarDiagnosticoTablaGenerico(tabla, limite, spec) {
   if (typeof tabla !== 'string' || !/^[A-Za-z0-9_]+$/.test(tabla)) {
     return { ok: false, rechazado_motivo: 'nombre de tabla inválido' };
   }
-  const limiteSeguro = Math.min(Math.max(parseInt(limite, 10) || 20, 1), 50);
+  const limiteSeguro = Math.min(Math.max(parseInt(limite, 10) || 20, 1), spec ? 500 : 50);
   const p = await getPool();
 
   const existe = await p.request().query(
@@ -3568,6 +3654,8 @@ async function ejecutarDiagnosticoTablaGenerico(tabla, limite) {
   if (!seguridad.segura) {
     return { ok: false, rechazado_motivo: `bloqueada: ${seguridad.motivo}` };
   }
+
+  if (spec) return await ejecutarQueryGenerica(p, tabla, spec, limiteSeguro).catch(e => ({ ok: false, rechazado_motivo: `error de query: ${e.message}` }));
 
   const r = await p.request().query(`SELECT TOP ${limiteSeguro} * FROM [${tabla}]`);
   return { ok: true, rows: r.recordset };
