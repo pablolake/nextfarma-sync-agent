@@ -3469,12 +3469,18 @@ async function runDiagnostic(key) {
 // vive AQUÍ, en el agente, no solo como política del lado del servidor: aunque el panel (o
 // quien sea) pida una tabla de clientes/pacientes por error o mala intención, el agente se
 // niega él mismo. Dos capas: nombre de tabla obviamente de cliente/paciente, y columnas que
-// delatan datos de paciente aunque el nombre de la tabla no lo sugiera (caso real visto hoy:
-// "LineaRE" en Auxi Marbella no suena a nada especial, pero tiene NombrePaciente/CIP/Firmada).
+// delatan datos de paciente O credenciales de un servicio externo, aunque el nombre de la
+// tabla no lo sugiera (casos reales vistos hoy: "LineaRE" en Auxi Marbella no suena a nada
+// especial, pero tiene NombrePaciente/CIP/Firmada; "_4DB_ACD_Config" es config del servicio
+// Conecta4D, con Usuario/Pwd/Token reales).
 const TABLAS_PROHIBIDAS_NOMBRE = /cliente|paciente/i;
 const COLUMNAS_PROHIBIDAS = [
   'nombrepaciente', 'apellidospaciente', 'cip', 'dni', 'nif',
   'fechanacimiento', 'historiaclinica', 'numcolegiado',
+  // 07/09/2026: al investigar _4DB_ACD_Config (config del servicio Conecta4D/Cofares) se vio
+  // que tiene columnas Usuario/Pwd/Token — credenciales reales de un servicio externo, no
+  // datos de paciente, pero igual de sensibles y que este mecanismo tampoco debe exponer nunca.
+  'pwd', 'password', 'passwd', 'contrasena', 'contraseña', 'token', 'apikey', 'secret',
 ];
 
 // Compara por PALABRA completa, no subcadena — 07/09/2026, falso positivo real (Rincon
