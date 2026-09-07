@@ -612,6 +612,32 @@ async function runSync(opts = {}) {
     log.warn('4DB omitido:', e.message);
   }
 
+  // _4DB_ACD_Acuerdo (07/09/2026): RELLENO, no reemplazo — solo entra en un CN que sigue sin
+  // ningún dto tras el merge de arriba (jose/jose2 no se tocan: sus CN con dto ya puesto por
+  // COFARES DIRECTO nunca pasan por aquí). Validado 3/3 contra dto ya confiado antes de escribir
+  // esto (ver comentario en fetchAcuerdosDescuento). Mismo cofares_directo=true que el canal
+  // COFARES_SG normal — no es un canal nuevo en calcMU, solo otra forma de rellenar el mismo dto.
+  try {
+    const { registros: acuerdos } = await farmatic.fetchAcuerdosDescuento();
+    if (acuerdos.length > 0) {
+      const mapAcuerdos = new Map(acuerdos.map(a => [a.codigo_nacional, a]));
+      let nAcuerdos = 0;
+      for (const prod of productos) {
+        if (prod.dto > 0) continue; // ya cubierto (4DB, Farmatic, manual) — no se toca
+        const a = mapAcuerdos.get(prod.codigo_nacional);
+        if (a) {
+          prod.dto = a.dto_pct;
+          prod.dto_origen = '4db_acuerdo';
+          prod.cofares_directo = true;
+          nAcuerdos++;
+        }
+      }
+      if (nAcuerdos > 0) log.info(`✓ 4DB acuerdos: ${nAcuerdos} CN rellenados (sin dto por otra vía)`);
+    }
+  } catch (e) {
+    log.warn('4DB acuerdos omitido:', e.message);
+  }
+
   // Publicitarios (OTC/parafarmacia) — plan Fase 3.2: universo disjunto de Genéricos, resuelto
   // aparte por fetchPublicitariosGP(). No bloquea el resto del sync si falla (misma política
   // que 4DB/recepciones arriba). El diagnóstico se manda SIEMPRE con warn()/ok() (no solo

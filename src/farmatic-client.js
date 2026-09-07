@@ -1554,6 +1554,36 @@ async function fetch4DBDescuentos(modeloReceta) {
   return { registros, modelos };
 }
 
+// _4DB_ACD_Acuerdo (07/09/2026, Auxi Marbella/Rincon Abaurre): fuente de RELLENO, no de
+// reemplazo — validada 3/3 sin contradicción contra dto_pct ya confiado (2 acuerdos reales de
+// jose vía COFARES DIRECTO, 1 de Auxi) antes de escribir esta función. A diferencia de
+// _4DB_CAT_Models (un catálogo completo por modelo/instalación), esta es la lista PEQUEÑA de
+// acuerdos comerciales reales negociados con cada laboratorio (Estado='A' = vigente,
+// FechaInicio/FechaFin = vigencia real) — en jose solo 2 filas, en Auxi 15. Nunca sustituye el
+// dto de _4DB_CAT_Models: sync.js solo la usa para CN que siguen sin ningún dto tras el merge
+// de arriba. Articu = codigoNacional directo (única correspondencia validada, sin tabla
+// intermedia de Farmatic de por medio).
+async function fetchAcuerdosDescuento() {
+  const p = await getPool();
+  const tabla = await p.request().query(`SELECT name FROM sys.tables WHERE name = '_4DB_ACD_Acuerdo'`);
+  if (tabla.recordset.length === 0) {
+    return { registros: [] };
+  }
+  const result = await p.request().query(`
+    SELECT LTRIM(RTRIM(CAST(Articu AS VARCHAR))) AS cn, MAX(Porcentaje) AS porcentaje
+      FROM _4DB_ACD_Acuerdo
+     WHERE Estado = 'A' AND FechaFin >= GETDATE()
+     GROUP BY Articu
+  `);
+  const registros = result.recordset
+    .map(r => ({
+      codigo_nacional: String(r.cn).trim(),
+      dto_pct: r.porcentaje != null ? +(Number(r.porcentaje) / 100).toFixed(4) : 0,
+    }))
+    .filter(r => /^\d{5,}$/.test(r.codigo_nacional) && r.dto_pct > 0);
+  return { registros };
+}
+
 // Módulo Publicitarios (OTC/parafarmacia) — Fase 3.2 del plan. Universo DISJUNTO del de
 // Genéricos (codigo_gh/BP_CONJARTI con CODCCAA=0 en fetchProductos): aquí NO se filtra por
 // CODCCAA=0 porque el filtro maestro de Publicitarios (DISPENSACION='_' AND TIPO='E') puede
@@ -3578,6 +3608,7 @@ module.exports = {
   procesarVendedoresPendientes,
   verificarTablas,
   fetch4DBDescuentos,
+  fetchAcuerdosDescuento,
   fetchPublicitariosGP,
   procesarCambiosPendientes,
   procesarStockPendientes,
