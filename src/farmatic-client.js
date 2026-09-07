@@ -1248,9 +1248,17 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
     });
 
     if (colArticuGrupoIva && colGrupoivaId && colGrupoivaTipo && colTablaivaTipoArt && colPiva && colPreq) {
+      // BUG real (07/09/2026, encontrado auditando por qué piva/preq salía NULL en el 100% de
+      // las líneas de las 5 farmacias, en TODOS los canales, no solo receta): estas 4 columnas
+      // son CHAR de ancho fijo en Farmatic (confirmado vía farmatic_schema_info.tablas_completo)
+      // — comparar CHAR sin LTRIM/RTRIM es el mismo problema de relleno de espacios que ya se
+      // trata en cualquier otro cruce de este fichero (ver comentarios de fetchRecepcionesDetalle
+      // más arriba), pero este cruce en concreto se quedó sin ese tratamiento. El resultado real:
+      // el JOIN nunca matcheaba ninguna fila, así que el predictor de descuentos (Fase 1) lleva
+      // meses capturando recepciones sin poder calcular NUNCA un dto_real, en ningún tenant.
       joinIva = `
-        LEFT JOIN Grupoiva gi ON gi.${colGrupoivaId} = a.${colArticuGrupoIva}
-        LEFT JOIN Tablaiva ti ON ti.${colTablaivaTipoArt} = gi.${colGrupoivaTipo}`;
+        LEFT JOIN Grupoiva gi ON LTRIM(RTRIM(gi.${colGrupoivaId})) = LTRIM(RTRIM(a.${colArticuGrupoIva}))
+        LEFT JOIN Tablaiva ti ON LTRIM(RTRIM(ti.${colTablaivaTipoArt})) = LTRIM(RTRIM(gi.${colGrupoivaTipo}))`;
       selPiva = `ti.${colPiva}`;
       selPreq = `ti.${colPreq}`;
     } else {
