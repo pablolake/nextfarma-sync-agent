@@ -3469,6 +3469,20 @@ const COLUMNAS_PROHIBIDAS = [
   'fechanacimiento', 'historiaclinica', 'numcolegiado',
 ];
 
+// Compara por PALABRA completa, no subcadena — 07/09/2026, falso positivo real (Rincon
+// Abaurre): "bonif" (bonificación) contiene literalmente "nif" como subcadena y bloqueaba
+// _4DB_CAT_CatalogoArt entera sin tener nada que ver con un DNI/NIF de cliente. Se separa el
+// nombre de columna en palabras por camelCase/guión bajo y se compara cada palabra completa
+// contra la lista — "ClienteNIF"/"NIF_Cliente"/"NIF" siguen detectándose (el token "nif"
+// aparece limpio), pero "bonif" (sin límite de mayúscula/guión) ya no.
+function palabrasDeColumna(nombre) {
+  return nombre
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .split(/[_\s]+/)
+    .map(s => s.toLowerCase())
+    .filter(Boolean);
+}
+
 async function esTablaSegura(p, tabla) {
   if (TABLAS_PROHIBIDAS_NOMBRE.test(tabla)) {
     return { segura: false, motivo: `nombre de tabla sugiere datos de cliente/paciente ("${tabla}")` };
@@ -3476,8 +3490,8 @@ async function esTablaSegura(p, tabla) {
   const colsR = await p.request().query(
     `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${tabla}'`
   ).catch(() => ({ recordset: [] }));
-  const columnas = colsR.recordset.map(r => String(r.COLUMN_NAME).toLowerCase());
-  const columnaProhibida = columnas.find(c => COLUMNAS_PROHIBIDAS.some(p2 => c.includes(p2)));
+  const columnas = colsR.recordset.map(r => String(r.COLUMN_NAME));
+  const columnaProhibida = columnas.find(c => palabrasDeColumna(c).some(tok => COLUMNAS_PROHIBIDAS.includes(tok)));
   if (columnaProhibida) {
     return { segura: false, motivo: `columna "${columnaProhibida}" sugiere datos de paciente` };
   }
