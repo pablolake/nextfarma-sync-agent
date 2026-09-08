@@ -57,7 +57,16 @@ function chunk(arr, size) {
 async function status() { return request('/api/sync/status'); }
 
 async function enviarProductos(productos, onLote) {
-  const batchSize = parseInt(process.env.BATCH_SIZE, 10) || 500;
+  // Lote propio, más pequeño que BATCH_SIZE (08/09/2026, Auxi Marbella: "15337 productos
+  // rechazados" sin ninguna fila real en sync_productos_errores — el servidor no reportaba
+  // ningún fallo real por producto, así que el "rechazo" era del lado del agente: /api/sync/
+  // productos hace 4-8 queries SECUENCIALES por producto (histórico de precio, GH, GP, stock,
+  // laboratorio...) — un lote de 500 puede necesitar 2000-4000 queries de servidor, fácilmente
+  // por encima del timeout de 180s (ver request() en este mismo fichero) aunque el servidor
+  // siga procesando bien de fondo. BATCH_SIZE (500, fijo en electron/main.js) es correcto para
+  // ventas/recepciones (una sola query por fila) — productos necesita su propio tamaño, no el
+  // compartido.
+  const batchSize = Math.min(parseInt(process.env.BATCH_SIZE, 10) || 500, 150);
   const batches   = chunk(productos, batchSize);
   const totals    = { total: 0, inserted: 0, updated: 0, errors: 0 };
   for (let i = 0; i < batches.length; i++) {
