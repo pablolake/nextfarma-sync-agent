@@ -2531,17 +2531,39 @@ async function obtenerForeignKeys(p, tabla) {
   return r.recordset;
 }
 
+// Prefijo por familia (21/09/2026, petición explícita del titular tras el rebrand a
+// XestFarma: "a partir de ahora en las farmas nuevas cambiemos el prefijo") — "NF"/"NF Pub"
+// es el histórico, "XF"/"XF Pub" el actual. Una farmacia que YA tiene alguna lista con el
+// prefijo histórico de esa familia sigue usándolo para cualquier lista nueva que le falte —
+// nunca se mezclan "NF - X" y "XF - Y" dentro de la misma instalación. Solo una farmacia sin
+// NINGUNA lista de esa familia todavía (instalación nueva de verdad, o una que solo usa la
+// otra familia) arranca ya con el prefijo actual. Deliberadamente no migra nada: las listas
+// "NF - X" ya creadas en farmacias existentes se quedan así para siempre, a menos que se
+// decida lo contrario más adelante (ver homologarNombresListas para el precedente de cómo se
+// haría una migración real, gated y explícita).
+async function resolverPrefijoListas(p, colNombre, familia) {
+  const legacy = familia === 'pub' ? 'NF Pub' : 'NF';
+  const actual = familia === 'pub' ? 'XF Pub' : 'XF';
+  const r = await p.request()
+    .input('patron', sql.VarChar, `${legacy} - %`)
+    .query(`SELECT TOP 1 1 AS x FROM ListaArticu WHERE ${colNombre} LIKE @patron`)
+    .catch(() => ({ recordset: [] }));
+  return r.recordset.length ? legacy : actual;
+}
+
 // Genérico: crea (si faltan) las listas de un "esquema" bucket→env var — usado tanto para
 // las 7 de categoría (CATEGORIA_ENV) como para las 3 de color de margen (COLOR_ENV). Mismo
 // nombre "NextFarma - {BUCKET}" en ambos casos, así que reutilizar esto en vez de duplicar
 // la función evita que un fix (p.ej. las columnas extra de ListaArticu) se aplique a una y
 // se olvide en la otra.
-// `prefijoNombre` (opcional, default "NextFarma") — Publicitarios usa las mismas claves de
-// bucket que Receta (verde/amarillo/gris) para que el resto del código pueda buscar por el
-// color literal que manda el backend, pero eso haría que ambos auto-crearan una lista con el
-// MISMO nombre visible ("NextFarma - verde") si se dejara el prefijo fijo — confuso para el
-// titular mirando la lista de Farmatic. El prefijo distingue el nombre sin tocar las claves.
-async function asegurarListas(envMap, prefijoNombre) {
+// `familia` ('base' o 'pub') — Publicitarios usa las mismas claves de bucket que Receta
+// (verde/amarillo/gris) para que el resto del código pueda buscar por el color literal que
+// manda el backend, pero eso haría que ambos auto-crearan una lista con el MISMO nombre
+// visible si se usara la misma familia de prefijo — confuso para el titular mirando la
+// lista de Farmatic. La familia distingue el nombre sin tocar las claves; el prefijo real
+// de cada familia lo resuelve resolverPrefijoListas (ver más abajo) según si esta instalación
+// ya tiene o no listas con el prefijo histórico.
+async function asegurarListas(envMap, familia = 'base') {
   const p = await getPool();
 
   const tblR = await p.request().query(`SELECT name FROM sys.tables WHERE name = 'ListaArticu'`)
@@ -2620,14 +2642,17 @@ async function asegurarListas(envMap, prefijoNombre) {
   const creadas = [];
   const fallos = [];
   const faltantes = Object.keys(envMap).filter(bucket => !process.env[envMap[bucket]]);
+  // Resuelto una sola vez por llamada (no por bucket) — solo si de verdad hay algo que
+  // crear, para no gastar una consulta de más en el caso normal (todo ya configurado).
+  const prefijoNombre = faltantes.length ? await resolverPrefijoListas(p, colNombre, familia) : null;
   for (const bucket of faltantes) {
-    // "NF" en vez de "NextFarma" — Nombre de ListaArticu suele ser un VARCHAR muy corto
-    // (visto en producción/test: 22 caracteres). Con el prefijo largo, "NextFarma - " (12
-    // caracteres) ya deja apenas hueco para nombres de bucket largos (INCENTIVADOS_STAR,
-    // MAX_ROTACION_A) y directamente desborda con el prefijo extra de Publicitarios
-    // ("NextFarma Publicitarios - verde" se veía en Farmatic como "NextFarma Publicitario",
-    // igual para las 4 listas, indistinguibles). "NF" dejado libre para el resto del nombre.
-    const nombreLista = `${prefijoNombre || 'NF'} - ${bucket}`;
+    // "NF"/"XF" (nunca el nombre completo) — Nombre de ListaArticu suele ser un VARCHAR muy
+    // corto (visto en producción/test: 22 caracteres). Con un prefijo largo tipo "XestFarma -
+    // " ya deja apenas hueco para nombres de bucket largos (INCENTIVADOS_STAR, MAX_ROTACION_A)
+    // y directamente desborda con el prefijo extra de Publicitarios ("XestFarma Publicitarios
+    // - verde" se vería truncado e indistinguible entre las 4 listas, mismo problema real que
+    // ya se vio con "NextFarma" antes de acortarlo). Dos letras dejadas libres para el resto.
+    const nombreLista = `${prefijoNombre} - ${bucket}`;
     const nombreAjustado = (maxNombre > 0 && nombreLista.length > maxNombre)
       ? nombreLista.slice(0, maxNombre) : nombreLista;
     const columnas = [...columnasBase];
@@ -2678,8 +2703,8 @@ async function asegurarListas(envMap, prefijoNombre) {
 }
 const asegurarListasCategoria = () => asegurarListas(CATEGORIA_ENV);
 const asegurarListasColor     = () => asegurarListas(COLOR_ENV);
-const asegurarListasColorPublicitarios = () => asegurarListas(PUBLICITARIOS_COLOR_ENV, 'NF Pub');
-const asegurarListaFavoritosPublicitarios = () => asegurarListas(PUBLICITARIOS_FAVORITOS_ENV, 'NF Pub');
+const asegurarListasColorPublicitarios = () => asegurarListas(PUBLICITARIOS_COLOR_ENV, 'pub');
+const asegurarListaFavoritosPublicitarios = () => asegurarListas(PUBLICITARIOS_FAVORITOS_ENV, 'pub');
 
 // Homologación de nombres (31/08/2026) — acción explícita, gated por su propio candado
 // (farmatic_homologar_nombres_listas), NUNCA automática por defecto: farmacias que ya usaban
