@@ -1,6 +1,6 @@
 {
   "name": "nextfarma-sync",
-  "version": "1.0.113",
+  "version": "1.0.114",
   "description": "XestFarma Sync — agente local que sincroniza Farmatic (SQL Server) con la plataforma XestFarma.",
   "private": true,
   "main": "electron/main.js",
@@ -48,7 +48,7 @@
           ]
         }
       ],
-      "artifactName": "NextFarma-Sync-Setup.${ext}"
+      "artifactName": "XestFarma-Sync-Setup.${ext}"
     },
     "mac": {
       "icon": "build/icon.icns",
@@ -61,7 +61,7 @@
           ]
         }
       ],
-      "artifactName": "NextFarma-Sync-${version}.${ext}",
+      "artifactName": "XestFarma-Sync-${version}.${ext}",
       "category": "public.app-category.business"
     },
     "nsis": {
