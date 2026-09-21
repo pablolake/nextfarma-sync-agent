@@ -100,7 +100,7 @@ async function runSync(opts = {}) {
   const err  = (msg) => { resultados.error.push(msg); log.error('✗ ' + msg); };
 
   // ── PASO 1: Verificar API ────────────────────────────────────────────
-  step('api', 'Verificando conexión con NextFarma…', 'running');
+  step('api', 'Verificando conexión con XestFarma…', 'running');
   try {
     const s = await api.status();
     ok(`API conectada · Farmacia: ${s.tenant?.nombre || '—'}`);
@@ -108,7 +108,7 @@ async function runSync(opts = {}) {
   } catch (e) {
     err('API inalcanzable: ' + e.message);
     step('api', 'API inalcanzable — verifica la conexión a internet', 'error');
-    err('Sync cancelado: sin conexión con NextFarma.');
+    err('Sync cancelado: sin conexión con XestFarma.');
     return { ...resultados, elapsed: '0s' };
   }
 
@@ -757,10 +757,10 @@ async function runSync(opts = {}) {
 
   // ── PASO 5: Enviar catálogo a NextFarma ─────────────────────────────
   if (productos.length > 0) {
-    step('env-cat', 'Enviando catálogo a NextFarma…', 'running');
+    step('env-cat', 'Enviando catálogo a XestFarma…', 'running');
     try {
       const r = await api.enviarProductos(productos, (lote, totalLotes) => {
-        step('env-cat', `Enviando catálogo a NextFarma… (lote ${lote}/${totalLotes})`, 'running');
+        step('env-cat', `Enviando catálogo a XestFarma… (lote ${lote}/${totalLotes})`, 'running');
       });
       ok(`Productos: ${r.inserted} nuevos, ${r.updated} actualizados${r.errors > 0 ? `, ${r.errors} errores` : ''}`);
       if (r.errors > 0) warn(`${r.errors} productos rechazados por la API — puede haber CNs con datos incompletos`);
@@ -776,10 +776,10 @@ async function runSync(opts = {}) {
 
   // ── PASO 6: Enviar ventas a NextFarma ───────────────────────────────
   if (todasVentas.length > 0) {
-    step('env-ven', 'Enviando ventas a NextFarma…', 'running');
+    step('env-ven', 'Enviando ventas a XestFarma…', 'running');
     try {
       const r = await api.enviarVentas(todasVentas, (lote, totalLotes) => {
-        step('env-ven', `Enviando ventas a NextFarma… (lote ${lote}/${totalLotes})`, 'running');
+        step('env-ven', `Enviando ventas a XestFarma… (lote ${lote}/${totalLotes})`, 'running');
       });
       ok(`Ventas: ${r.upserts} actualizadas${r.errors > 0 ? `, ${r.errors} errores` : ''}`);
       step('env-ven', `Ventas: ${r.upserts} registros enviados`, r.errors > 0 ? 'warn' : 'ok');
@@ -822,10 +822,10 @@ async function runSync(opts = {}) {
   // de un sync colgado. Mismo patrón ya aplicado a catálogo/ventas: step() propio + progreso
   // por lote.
   if (recepciones.length > 0) {
-    step('env-recep', 'Enviando recepciones a NextFarma…', 'running');
+    step('env-recep', 'Enviando recepciones a XestFarma…', 'running');
     try {
       const r = await api.enviarRecepciones(recepciones, (lote, totalLotes) => {
-        step('env-recep', `Enviando recepciones a NextFarma… (lote ${lote}/${totalLotes})`, 'running');
+        step('env-recep', `Enviando recepciones a XestFarma… (lote ${lote}/${totalLotes})`, 'running');
       });
       log.info(`✓ Recepciones: ${r.upserts} productos con precio real de albarán`);
       step('env-recep', `Recepciones: ${r.upserts} productos actualizados`, r.errors > 0 ? 'warn' : 'ok');
@@ -838,10 +838,10 @@ async function runSync(opts = {}) {
   }
 
   if (recepcionesDetalle.length > 0) {
-    step('env-recep-detalle', 'Enviando detalle de recepciones a NextFarma…', 'running');
+    step('env-recep-detalle', 'Enviando detalle de recepciones a XestFarma…', 'running');
     try {
       const r = await api.enviarRecepcionesDetalle(recepcionesDetalle, (lote, totalLotes) => {
-        step('env-recep-detalle', `Enviando detalle de recepciones a NextFarma… (lote ${lote}/${totalLotes})`, 'running');
+        step('env-recep-detalle', `Enviando detalle de recepciones a XestFarma… (lote ${lote}/${totalLotes})`, 'running');
       });
       log.info(`✓ Recepciones (detalle): ${r.upserts} líneas procesadas`);
       step('env-recep-detalle', `Recepciones (detalle): ${r.upserts} líneas procesadas`, r.errors > 0 ? 'warn' : 'ok');
@@ -852,10 +852,10 @@ async function runSync(opts = {}) {
   }
 
   if (recepcionesDescuentoReal.length > 0) {
-    step('env-recep-dto', 'Enviando predictor de descuentos a NextFarma…', 'running');
+    step('env-recep-dto', 'Enviando predictor de descuentos a XestFarma…', 'running');
     try {
       const r = await api.enviarRecepcionesDescuentoReal(recepcionesDescuentoReal, (lote, totalLotes) => {
-        step('env-recep-dto', `Enviando predictor de descuentos a NextFarma… (lote ${lote}/${totalLotes})`, 'running');
+        step('env-recep-dto', `Enviando predictor de descuentos a XestFarma… (lote ${lote}/${totalLotes})`, 'running');
       });
       log.info(`✓ Predictor de descuentos: ${r.guardados} líneas guardadas, ${r.descartados} descartadas por el servidor`);
       step('env-recep-dto', `Predictor de descuentos: ${r.guardados} líneas guardadas`, r.errors > 0 ? 'warn' : 'ok');
@@ -866,10 +866,10 @@ async function runSync(opts = {}) {
   }
 
   if (comprasMensuales.length > 0) {
-    step('env-compras', 'Enviando compras mensuales a NextFarma…', 'running');
+    step('env-compras', 'Enviando compras mensuales a XestFarma…', 'running');
     try {
       const r = await api.enviarComprasMensuales(comprasMensuales, (lote, totalLotes) => {
-        step('env-compras', `Enviando compras mensuales a NextFarma… (lote ${lote}/${totalLotes})`, 'running');
+        step('env-compras', `Enviando compras mensuales a XestFarma… (lote ${lote}/${totalLotes})`, 'running');
       });
       log.info(`✓ Compras mensuales: ${r.upserts} líneas procesadas`);
       step('env-compras', `Compras mensuales: ${r.upserts} líneas procesadas`, r.errors > 0 ? 'warn' : 'ok');

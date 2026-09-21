@@ -1,7 +1,7 @@
 {
   "name": "nextfarma-sync",
   "version": "1.0.112",
-  "description": "NextFarma Sync — agente local que sincroniza Farmatic (SQL Server) con la plataforma NextFarma.",
+  "description": "XestFarma Sync — agente local que sincroniza Farmatic (SQL Server) con la plataforma XestFarma.",
   "private": true,
   "main": "electron/main.js",
   "scripts": {
@@ -28,8 +28,8 @@
   },
   "build": {
     "appId": "es.nextfarma.sync",
-    "productName": "NextFarma Sync",
-    "copyright": "Copyright © 2026 NextFarma",
+    "productName": "XestFarma Sync",
+    "copyright": "Copyright © 2026 XestFarma",
     "asar": true,
     "files": [
       "electron/**/*",
@@ -69,7 +69,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "NextFarma Sync"
+      "shortcutName": "XestFarma Sync"
     },
     "publish": {
       "provider": "github",

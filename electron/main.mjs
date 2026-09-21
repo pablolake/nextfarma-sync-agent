@@ -76,7 +76,7 @@ async function runSyncOnce() {
   if (isSyncing) return;
   isSyncing = true;
   send('sync-status', { running: true });
-  tray?.setToolTip('NextFarma Sync · sincronizando…');
+  tray?.setToolTip('XestFarma Sync · sincronizando…');
   try {
     const { runSync } = require('../src/sync');
     lastSyncResults = await runSync({
@@ -84,12 +84,12 @@ async function runSyncOnce() {
     });
     lastSyncAt = new Date().toISOString();
     send('sync-status', { running: false, lastSyncAt });
-    tray?.setToolTip('NextFarma Sync · activo');
+    tray?.setToolTip('XestFarma Sync · activo');
   } catch (err) {
     const log = require('../src/logger');
     log.error('Error en sync:', err.message);
     send('sync-status', { running: false, error: err.message });
-    tray?.setToolTip('NextFarma Sync · error');
+    tray?.setToolTip('XestFarma Sync · error');
   } finally {
     isSyncing = false;
     refreshTray();
@@ -308,7 +308,7 @@ function createWindow() {
       nodeIntegration:  false,
       sandbox:          false,
     },
-    title:           'NextFarma Sync',
+    title:           'XestFarma Sync',
     backgroundColor: '#0f172a',
     show:            false,
   });
@@ -324,7 +324,7 @@ function createWindow() {
 function buildTrayMenu() {
   return Menu.buildFromTemplate([
     {
-      label: 'Abrir NextFarma Sync',
+      label: 'Abrir XestFarma Sync',
       click: () => { mainWindow?.show(); mainWindow?.focus(); },
     },
     { type: 'separator' },
@@ -362,7 +362,7 @@ function createTray() {
     }
   }
   tray = new Tray(icon);
-  tray.setToolTip('NextFarma Sync');
+  tray.setToolTip('XestFarma Sync');
   tray.setContextMenu(buildTrayMenu());
   tray.on('double-click', () => { mainWindow?.show(); mainWindow?.focus(); });
 }
