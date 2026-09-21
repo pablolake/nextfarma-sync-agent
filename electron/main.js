@@ -19,7 +19,17 @@ let localServerStarted = false;
 let lastSyncResults    = null;
 let logListenerAttached = false;
 let pendingUpdate      = false;
-let isQuittingForUpdate = false;
+// Bug real (21/09/2026, reportado: "cuando esté minimizado sync no me deja cerrarlo desde
+// el menú minimizado") — antes se llamaba isQuittingForUpdate y el handler de before-quit
+// (más abajo) solo la ponía a true SI había una actualización pendiente
+// (`if (pendingUpdate) isQuittingForUpdate = true`). Pulsar "Salir" en la bandeja sin
+// ninguna actualización pendiente disparaba before-quit igual, pero la bandera se quedaba en
+// false, así que el cierre de la ventana (mainWindow.on('close') más abajo) lo interceptaba
+// con preventDefault() y solo la ocultaba otra vez: "Salir" no salía nunca, solo volvía a
+// minimizar. before-quit disparándose YA significa que se pidió salir de verdad (desde
+// "Salir", desde instalar actualización, o desde Windows cerrando sesión) — se pone a true
+// siempre, sin condición.
+let isQuitting = false;
 
 // ── Single instance lock ─────────────────────────────────────────────────────
 const gotLock = app.requestSingleInstanceLock();
@@ -459,7 +469,7 @@ function setupAutoUpdater() {
 
 ipcMain.handle('install-update', () => {
   if (!pendingUpdate) return { ok: false };
-  isQuittingForUpdate = true;
+  isQuitting = true;
   autoUpdater.quitAndInstall(false, true);
   return { ok: true };
 });
@@ -486,7 +496,7 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => mainWindow.show());
 
-  mainWindow.on('close', (e) => { if (!isQuittingForUpdate) { e.preventDefault(); mainWindow.hide(); } });
+  mainWindow.on('close', (e) => { if (!isQuitting) { e.preventDefault(); mainWindow.hide(); } });
 }
 
 // ── Tray ──────────────────────────────────────────────────────────────────────
@@ -515,7 +525,14 @@ function buildTrayMenu() {
     {
       label: pendingUpdate ? '⟳ Instalar actualización y reiniciar' : 'Buscar actualizaciones',
       click: () => {
-        if (pendingUpdate) { autoUpdater.quitAndInstall(); return; }
+        // Mismo bug que "Salir" (ver comentario junto a `isQuitting` arriba) — este botón
+        // llamaba a quitAndInstall() sin poner isQuitting a true primero, así que
+        // mainWindow.on('close') podía interceptarlo igual que interceptaba "Salir". También
+        // sin (false, true) no fuerza que la app se reabra sola tras instalar, a diferencia
+        // del botón "Reiniciar y actualizar" del renderer (ipcMain 'install-update'), dejando
+        // la app instalada pero cerrada hasta que alguien la abriera a mano — la otra mitad de
+        // "a veces hay que cerrarla y volverla a abrir".
+        if (pendingUpdate) { isQuitting = true; autoUpdater.quitAndInstall(false, true); return; }
         if (app.isPackaged) autoUpdater.checkForUpdates().catch(() => {});
       },
     },
@@ -570,7 +587,7 @@ app.whenReady().then(() => {
 
 // ── Quit ──────────────────────────────────────────────────────────────────────
 app.on('before-quit', async () => {
-  if (pendingUpdate) isQuittingForUpdate = true;
+  isQuitting = true;
   stopAutoSync();
   try {
     const farmatic = require('../src/farmatic-client');
