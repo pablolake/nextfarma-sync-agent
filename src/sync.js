@@ -1011,33 +1011,6 @@ async function runSync(opts = {}) {
     log.warn('syncEncargosVencidos omitido:', e.message);
   }
 
-  // Estas 3 colas se identifican por X-API-Key, no por un tenantId local (que el exe nunca ha
-  // guardado — ver comentario en api-client.js) — se llaman siempre, sin condición previa.
-  try {
-    const { cambios } = await api.getCambiosPendientes();
-    if (cambios && cambios.length > 0) {
-      log.info('Cambios pendientes: ' + cambios.length + ' a procesar');
-      const r = await farmatic.procesarCambiosPendientes(cambios);
-      log.info(`Cambios procesados: ${r.procesados} OK, ${r.errores} errores`);
-      if (r.ids_procesados && r.ids_procesados.length > 0) {
-        await api.marcarCambiosProcesados(r.ids_procesados);
-      }
-      // El servidor ya marcó estos `cambios.length` como 'aplicando' al entregarlos — si aquí
-      // no se confirma ninguno, se quedan colgados hasta el timeout de 30 min sin que nadie
-      // sepa por qué. Que quede en el resumen del sync (warnings_detalle del ping), no solo en
-      // el log local del PC de la farmacia.
-      if (r.sinListas) {
-        warn(`${cambios.length} cambio(s) de favorito/categoría pendientes sin aplicar: falta completar el Asistente (paso Listas) para activar la escritura en Farmatic`);
-      } else if (r.procesados === 0 && (!r.ids_procesados || r.ids_procesados.length === 0)) {
-        warn(`${cambios.length} cambio(s) de favorito/categoría pendientes no se aplicaron esta vez (${r.errores} error(es))`);
-      }
-    } else {
-      log.info('Sin cambios pendientes.');
-    }
-  } catch (e) {
-    log.warn('Cambios pendientes omitidos:', e.message);
-  }
-
   // Lista Roja (30/08/2026) — LIST_NEGRA nunca se autocreaba (a diferencia de categoría/color,
   // ver comentario junto a LISTA_ROJA_ENV en farmatic-client.js); ahora sí, con el mismo doble
   // candado que ya protege categoría o color de Publicitarios (cualquiera de los dos habilita
@@ -1067,6 +1040,77 @@ async function runSync(opts = {}) {
     }
   } catch (e) {
     warn('Auto-creación de la Lista Roja omitida: ' + e.message);
+  }
+
+  await procesarColasPendientes(api, log, warn);
+
+  // Fase B de la auto-creación de listas (ver fase A al principio del sync): con las
+  // ventas de este ciclo ya subidas, se rellenan con "más vendido" los grupos que la fase
+  // A dejó sin favorito real. Mismo doble candado (farmatic_write_enabled +
+  // farmatic_autocrear_listas) — si en la fase A no se llegaron a crear/asegurar las
+  // listas (escritura desactivada, o esquema no reconocible), getCategoriaLista() sigue
+  // sin nada y esto no hace nada.
+  try {
+    if (farmatic.getCategoriaLista()) {
+      const cfgTenant = await api.obtenerConfigSync();
+      if (cfgTenant.farmatic_write_enabled && cfgTenant.farmatic_autocrear_listas) {
+        const categorias = await api.obtenerCategoriasActuales();
+        const resultado = await farmatic.completarFavoritosConMasVendido(categorias);
+        if (resultado?.favoritos_completados > 0) {
+          ok(`Favoritos completados con más vendido: ${resultado.favoritos_completados}`);
+        }
+      }
+    }
+  } catch (e) {
+    warn('Completar favoritos con más vendido omitido: ' + e.message);
+  }
+
+  step('cronicos', 'Crónicos y encargos sincronizados', 'ok');
+
+  const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+  log.info('═══════════════════════════════════════════');
+  if (resultados.error.length > 0 || resultados.warn.length > 0) {
+    log.info(`Sync completado en ${elapsed}s con avisos:`);
+    resultados.warn.forEach(m  => log.warn('  ⚠ ' + m));
+    resultados.error.forEach(m => log.error('  ✗ ' + m));
+    if (resultados.error.length > 0)
+      log.error('Revisa la configuración de conexión o contacta con soporte.');
+  } else {
+    log.info(`Sync completado correctamente en ${elapsed}s`);
+  }
+
+  await sendPing(resultados.error.length > 0 ? 'error' : resultados.warn.length > 0 ? 'warn' : 'ok', elapsed)
+
+  return { ...resultados, elapsed, listasCreadas, listasColorCreadas, listasPublicitariosCreadas, listaRojaCreada };
+}
+
+// Colas de escritura NextFarma → Farmatic (cambios de favoritos/categorías en listas, lista negra,
+// mín/máx de stock, altas de empleados). Se extraen de runSync para poder ejecutarlas solas, sin
+// leer ni enviar datos pesados: es lo único que el ciclo "ligero" (cada minuto) necesita hacer.
+async function procesarColasPendientes(api, log, warn) {
+  // Estas 3 colas se identifican por X-API-Key, no por un tenantId local (que el exe nunca ha
+  // guardado — ver comentario en api-client.js) — se llaman siempre, sin condición previa.
+  try {
+    const { cambios } = await api.getCambiosPendientes();
+    if (cambios && cambios.length > 0) {
+      log.info('Cambios pendientes: ' + cambios.length + ' a procesar');
+      const r = await farmatic.procesarCambiosPendientes(cambios);
+      log.info(`Cambios procesados: ${r.procesados} OK, ${r.errores} errores`);
+      if (r.ids_procesados && r.ids_procesados.length > 0) {
+        await api.marcarCambiosProcesados(r.ids_procesados);
+      }
+      // El servidor ya marcó estos `cambios.length` como 'aplicando' al entregarlos — si aquí
+      // no se confirma ninguno, se quedan colgados hasta el timeout de 30 min sin que nadie
+      // sepa por qué. Que quede en el resumen del sync (warnings_detalle del ping), no solo en
+      // el log local del PC de la farmacia.
+      if (r.sinListas) {
+        warn(`${cambios.length} cambio(s) de favorito/categoría pendientes sin aplicar: falta completar el Asistente (paso Listas) para activar la escritura en Farmatic`);
+      } else if (r.procesados === 0 && (!r.ids_procesados || r.ids_procesados.length === 0)) {
+        warn(`${cambios.length} cambio(s) de favorito/categoría pendientes no se aplicaron esta vez (${r.errores} error(es))`);
+      }
+    }
+  } catch (e) {
+    log.warn('Cambios pendientes omitidos:', e.message);
   }
 
   try {
@@ -1111,44 +1155,6 @@ async function runSync(opts = {}) {
     log.warn('Alta de empleados nuevos omitida:', e.message);
   }
 
-  // Fase B de la auto-creación de listas (ver fase A al principio del sync): con las
-  // ventas de este ciclo ya subidas, se rellenan con "más vendido" los grupos que la fase
-  // A dejó sin favorito real. Mismo doble candado (farmatic_write_enabled +
-  // farmatic_autocrear_listas) — si en la fase A no se llegaron a crear/asegurar las
-  // listas (escritura desactivada, o esquema no reconocible), getCategoriaLista() sigue
-  // sin nada y esto no hace nada.
-  try {
-    if (farmatic.getCategoriaLista()) {
-      const cfgTenant = await api.obtenerConfigSync();
-      if (cfgTenant.farmatic_write_enabled && cfgTenant.farmatic_autocrear_listas) {
-        const categorias = await api.obtenerCategoriasActuales();
-        const resultado = await farmatic.completarFavoritosConMasVendido(categorias);
-        if (resultado?.favoritos_completados > 0) {
-          ok(`Favoritos completados con más vendido: ${resultado.favoritos_completados}`);
-        }
-      }
-    }
-  } catch (e) {
-    warn('Completar favoritos con más vendido omitido: ' + e.message);
-  }
-
-  step('cronicos', 'Crónicos y encargos sincronizados', 'ok');
-
-  const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-  log.info('═══════════════════════════════════════════');
-  if (resultados.error.length > 0 || resultados.warn.length > 0) {
-    log.info(`Sync completado en ${elapsed}s con avisos:`);
-    resultados.warn.forEach(m  => log.warn('  ⚠ ' + m));
-    resultados.error.forEach(m => log.error('  ✗ ' + m));
-    if (resultados.error.length > 0)
-      log.error('Revisa la configuración de conexión o contacta con soporte.');
-  } else {
-    log.info(`Sync completado correctamente en ${elapsed}s`);
-  }
-
-  await sendPing(resultados.error.length > 0 ? 'error' : resultados.warn.length > 0 ? 'warn' : 'ok', elapsed)
-
-  return { ...resultados, elapsed, listasCreadas, listasColorCreadas, listasPublicitariosCreadas, listaRojaCreada };
 }
 
 async function syncEncargos() {
@@ -1363,4 +1369,21 @@ async function syncEncargosVencidos(apiClient, log) {
   }
 }
 
-module.exports = { runSync };
+// Ciclo ligero (cada minuto, siempre activo): SOLO aplica en Farmatic lo que se haya pedido desde
+// XestFarma (cambios de listas, lista negra, mín/máx de stock, altas de empleados). No lee
+// ventas/catálogo/recepciones ni sube nada pesado — eso es del ciclo nocturno (runSync).
+// Lanza si Farmatic no conecta, para que main.js pause los reintentos (un login fallido por
+// minuto podría bloquear la cuenta sa, ver comentario de PASO 1a en runSync).
+let _mapeoEsquemaAt = 0;
+async function runLight() {
+  await farmatic.getPool();
+  if (Date.now() - _mapeoEsquemaAt > 10 * 60 * 1000) {
+    farmatic.setMapeoEsquema(await api.obtenerMapeoEsquema());
+    _mapeoEsquemaAt = Date.now();
+  }
+  const avisos = [];
+  await procesarColasPendientes(api, log, (m) => { avisos.push(m); log.warn('⚠ ' + m); });
+  return { avisos };
+}
+
+module.exports = { runSync, runLight };

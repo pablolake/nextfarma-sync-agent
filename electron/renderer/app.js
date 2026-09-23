@@ -46,7 +46,7 @@ async function loadAndApplyConfig() {
   document.getElementById('cfg-db-password').value = cfg.db?.password || '';
   document.getElementById('cfg-db-name').value     = cfg.db?.name     || 'Farmatic';
   document.getElementById('cfg-db-consejo').value  = cfg.db?.consejo  || 'Consejo';
-  document.getElementById('cfg-interval').value    = cfg.syncIntervalMinutes || 15;
+  document.getElementById('cfg-interval').value    = Number.isInteger(cfg.syncNightlyHour) ? cfg.syncNightlyHour : 0;
   document.getElementById('cfg-autostart').checked = cfg.autostart  !== false;
   document.getElementById('cfg-autosync').checked  = cfg.autosync   !== false;
 
@@ -76,7 +76,7 @@ async function saveConfig() {
       name:     document.getElementById('cfg-db-name').value.trim()     || 'Farmatic',
       consejo:  document.getElementById('cfg-db-consejo').value.trim()  || 'Consejo',
     },
-    syncIntervalMinutes: parseInt(document.getElementById('cfg-interval').value) || 15,
+    syncNightlyHour: Math.min(23, Math.max(0, parseInt(document.getElementById('cfg-interval').value) || 0)),
     autostart: document.getElementById('cfg-autostart').checked,
     autosync:  document.getElementById('cfg-autosync').checked,
   };
@@ -234,7 +234,17 @@ function onSyncEnabled(data) {
   toggle.checked = data.enabled;
   document.getElementById('sync-toggle-label').textContent = data.enabled ? 'Activa' : 'Desactivada';
 
-  if (data.enabled && data.intervalMinutes) {
+  if (data.enabled && data.nextFullAt) {
+    stopCountdown();
+    const el = document.getElementById('next-sync-label');
+    if (el) {
+      const d = new Date(data.nextFullAt);
+      el.textContent = 'Próxima sincronización completa: ' + d.toLocaleString('es-ES', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+    }
+    const dot = document.getElementById('status-dot');
+    dot.className = 'status-dot ok';
+    document.getElementById('status-label').textContent = 'Activo';
+  } else if (data.enabled && data.intervalMinutes) {
     startCountdown(data.intervalMinutes * 60);
     const dot = document.getElementById('status-dot');
     dot.className = 'status-dot ok';

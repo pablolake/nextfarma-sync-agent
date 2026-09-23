@@ -95,6 +95,11 @@ function send(channel, data) {
 }
 
 // ── Sync engine ──────────────────────────────────────────────────────────────
+// Rediseño (23/09/2026): el ciclo COMPLETO (leer ventas/catálogo/recepciones y subirlos) es
+// costoso, así que corre UNA vez al día a la hora local del PC (por defecto 00:00, config
+// syncNightlyHour) — o al arrancar si esa toma ya se perdió (PC apagado a esa hora). Aparte, un
+// ciclo LIGERO cada minuto (tickSync) aplica en Farmatic lo que se haya pedido desde XestFarma
+// (listas, lista negra, stock, empleados) sin leer nada pesado.
 async function runSyncOnce() {
   if (isSyncing) return;
   isSyncing = true;
@@ -145,8 +150,11 @@ async function runSyncOnce() {
       applyConfig(cfg);
     }
     lastSyncAt = new Date().toISOString();
+    store.set('lastFullSyncAt', lastSyncAt);
+    fullRetryAfter = 0;
     send('sync-status', { running: false, lastSyncAt });
     tray?.setToolTip('XestFarma Sync · activo');
+    send('sync-enabled', { enabled: true, nextFullAt: nextFullSyncAt().toISOString() });
   } catch (err) {
     const log = require('../src/logger');
     const farmatic = require('../src/farmatic-client');
@@ -158,20 +166,63 @@ async function runSyncOnce() {
     }
     send('sync-status', { running: false, error: err.message, diagnostico });
     tray?.setToolTip('XestFarma Sync · error');
+    fullRetryAfter = Date.now() + 30 * 60 * 1000; // no reintentar el ciclo pesado cada minuto
   } finally {
     isSyncing = false;
     refreshTray();
   }
 }
 
+let fullRetryAfter = 0;      // tras un fallo del ciclo completo, no reintentar antes de esta hora
+let lightPausedUntil = 0;    // tras un fallo del ciclo ligero (p. ej. Farmatic no conecta), pausa
+let isLightRunning = false;
+
+function nightlyHour() {
+  const h = parseInt(store.get('config', {}).syncNightlyHour, 10);
+  return Number.isInteger(h) && h >= 0 && h <= 23 ? h : 0;
+}
+// Última toma programada ya pasada (hora local del PC) y la siguiente.
+function lastFullSlot(now = new Date()) {
+  const d = new Date(now); d.setHours(nightlyHour(), 0, 0, 0);
+  if (d > now) d.setDate(d.getDate() - 1);
+  return d;
+}
+function nextFullSyncAt(now = new Date()) {
+  const d = lastFullSlot(now); d.setDate(d.getDate() + 1);
+  return d;
+}
+function fullSyncDue() {
+  const last = store.get('lastFullSyncAt');
+  return !last || new Date(last) < lastFullSlot();
+}
+
+async function runLightOnce() {
+  if (isSyncing || isLightRunning) return;
+  isLightRunning = true;
+  try {
+    const { runLight } = require('../src/sync');
+    await runLight();
+  } catch (err) {
+    const log = require('../src/logger');
+    log.warn('Ciclo ligero omitido (se reintenta en 10 min):', err.message);
+    lightPausedUntil = Date.now() + 10 * 60 * 1000;
+  } finally {
+    isLightRunning = false;
+  }
+}
+
+async function tickSync() {
+  if (!syncEnabled || isSyncing || isLightRunning) return;
+  if (fullSyncDue() && Date.now() >= fullRetryAfter) return runSyncOnce();
+  if (Date.now() >= lightPausedUntil) return runLightOnce();
+}
+
 function startAutoSync() {
   stopAutoSync();
-  const cfg     = store.get('config', {});
-  const minutes = cfg.syncIntervalMinutes || 15;
-  syncEnabled   = true;
-  runSyncOnce();
-  syncTimer = setInterval(() => runSyncOnce(), minutes * 60 * 1000);
-  send('sync-enabled', { enabled: true, intervalMinutes: minutes });
+  syncEnabled = true;
+  tickSync();
+  syncTimer = setInterval(() => tickSync(), 60 * 1000);
+  send('sync-enabled', { enabled: true, nextFullAt: nextFullSyncAt().toISOString() });
   refreshTray();
 }
 
