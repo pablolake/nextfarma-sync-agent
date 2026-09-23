@@ -544,7 +544,7 @@ async function runSync(opts = {}) {
     // resueltas, join de IVA no resoluble) quedaba invisible en el log local del cliente,
     // nunca llegaba a last_sync_warnings_detalle. Encontrado auditando por qué esta tabla no
     // tenía ni una fila en producción semanas después de desplegar el predictor.
-    const r = await farmatic.fetchRecepcionesDescuentoReal(90);
+    const r = await farmatic.fetchRecepcionesDescuentoReal(backfillPendiente() ? 730 : 365);
     recepcionesDescuentoReal = r.lineas;
     log.info(`✓ ${recepcionesDescuentoReal.length} líneas para predictor de descuentos (últimos 90 días)`);
     if (r.diagnostico) warn(r.diagnostico);
