@@ -75,6 +75,18 @@ function calcularSCporLabMes(ventas, productos) {
   return sc;
 }
 
+// Backfill del histórico completo (23/09/2026, petición explícita: "ventas y compras de siempre" en la
+// DB de cada farmacia para poder analizarlas después). Una sola vez por instalación (marca en disco):
+// ventas de los años anteriores al rango normal (3 años) hasta 12 años atrás, y compras hasta 15 años.
+// Los upserts del servidor son idempotentes, así que repetirlo no duplica nada.
+const BACKFILL_FLAG = require('path').join(process.env.USERDATA_PATH || __dirname, 'backfill_historico_v1.done');
+function backfillPendiente() {
+  try { return !require('fs').existsSync(BACKFILL_FLAG); } catch { return false; }
+}
+function marcarBackfillHecho() {
+  try { require('fs').writeFileSync(BACKFILL_FLAG, new Date().toISOString()); } catch (e) { log.warn('No se pudo guardar la marca de backfill:', e.message); }
+}
+
 async function runSync(opts = {}) {
   const { onStep } = opts;
   // step() ya avisaba a la ventana local del asistente (onStep) — ahora también reporta al
@@ -544,13 +556,15 @@ async function runSync(opts = {}) {
   // reconstrucción histórica de favorito en el backend ("la recepción confirma", punto 29b).
   // Ventana larga (24 meses) a propósito, a diferencia de los 12/45 días de arriba.
   let comprasMensuales = [];
+  let comprasEnvioFallo = false;
   try {
-    comprasMensuales = await farmatic.fetchComprasMensuales(60);
-    log.info(`✓ ${comprasMensuales.length} líneas de compras mensuales leídas (60 meses)`);
+    comprasMensuales = await farmatic.fetchComprasMensuales(backfillPendiente() ? 180 : 60);
+    log.info(`✓ ${comprasMensuales.length} líneas de compras mensuales leídas (${backfillPendiente() ? '15 años, backfill' : '60 meses'})`);
     step('compras-mensuales', `Compras mensuales: ${comprasMensuales.length} líneas leídas`, 'ok');
   } catch (e) {
     log.warn('Compras mensuales no disponibles:', e.message);
     step('compras-mensuales', 'Compras mensuales no disponibles', 'warn');
+    comprasEnvioFallo = true;
   }
 
   // Priority 1: 4DB (Cofares Conecta 4D) — most accurate, normalized to decimal in farmatic-client
@@ -792,6 +806,32 @@ async function runSync(opts = {}) {
     step('env-ven', 'Sin ventas que enviar', 'warn');
   }
 
+  // Backfill de ventas antiguas (ver BACKFILL_FLAG): se envían aparte de todasVentas para no alterar
+  // los cálculos en memoria de arriba (SC por laboratorio, top 3), que asumen la ventana de 3 años.
+  let backfillCompleto = false;
+  if (backfillPendiente()) {
+    step('backfill', 'Histórico completo: leyendo ventas de años anteriores…', 'running');
+    try {
+      let vaciosSeguidos = 0, totalBackfill = 0;
+      backfillCompleto = true;
+      for (let a = anioActual - 3; a >= anioActual - 12 && vaciosSeguidos < 2; a--) {
+        const vv = await farmatic.fetchVentasMensuales(a, {});
+        if (!vv.length) { vaciosSeguidos++; continue; }
+        vaciosSeguidos = 0;
+        const r = await api.enviarVentas(vv);
+        totalBackfill += r.upserts || 0;
+        if (r.errors > 0) backfillCompleto = false;
+        log.info(`✓ Backfill ventas ${a}: ${r.upserts} actualizadas`);
+      }
+      ok(`Histórico de ventas antiguo: ${totalBackfill} registros`);
+      step('backfill', `Histórico de ventas antiguo: ${totalBackfill} registros`, 'ok');
+    } catch (e) {
+      backfillCompleto = false;
+      warn('Backfill de ventas antiguas incompleto (se reintentará): ' + e.message);
+      step('backfill', 'Backfill de ventas antiguas incompleto', 'warn');
+    }
+  }
+
   // Módulo Receta (Fase 1) — top 3 laboratorios por volumen, mismo dato en memoria que ya se
   // usó arriba para SC, no hace falta releer nada de Farmatic.
   if (todasVentas.length > 0 && productos.length > 0) {
@@ -875,6 +915,7 @@ async function runSync(opts = {}) {
       step('env-compras', `Compras mensuales: ${r.upserts} líneas procesadas`, r.errors > 0 ? 'warn' : 'ok');
     } catch (e) {
       log.warn('Error enviando compras mensuales:', e.message);
+      comprasEnvioFallo = true;
       step('env-compras', 'Error enviando compras mensuales: ' + e.message, 'error');
     }
   }
@@ -1079,6 +1120,8 @@ async function runSync(opts = {}) {
     log.info(`Sync completado correctamente en ${elapsed}s`);
   }
 
+  // La marca de backfill solo se guarda si las compras también llegaron (sin error de envío).
+  if (backfillCompleto && !comprasEnvioFallo) marcarBackfillHecho();
   await sendPing(resultados.error.length > 0 ? 'error' : resultados.warn.length > 0 ? 'warn' : 'ok', elapsed)
 
   return { ...resultados, elapsed, listasCreadas, listasColorCreadas, listasPublicitariosCreadas, listaRojaCreada };
