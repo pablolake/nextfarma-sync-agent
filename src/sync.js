@@ -545,8 +545,8 @@ async function runSync(opts = {}) {
   // Ventana larga (24 meses) a propósito, a diferencia de los 12/45 días de arriba.
   let comprasMensuales = [];
   try {
-    comprasMensuales = await farmatic.fetchComprasMensuales(24);
-    log.info(`✓ ${comprasMensuales.length} líneas de compras mensuales leídas (24 meses)`);
+    comprasMensuales = await farmatic.fetchComprasMensuales(60);
+    log.info(`✓ ${comprasMensuales.length} líneas de compras mensuales leídas (60 meses)`);
     step('compras-mensuales', `Compras mensuales: ${comprasMensuales.length} líneas leídas`, 'ok');
   } catch (e) {
     log.warn('Compras mensuales no disponibles:', e.message);
