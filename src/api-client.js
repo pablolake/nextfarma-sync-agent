@@ -193,6 +193,15 @@ async function enviarFavoritos(favoritos) {
   }
 }
 
+async function enviarListasPublicitarios(payload) {
+  try {
+    return await request('/api/sync/listas-publicitarios', { method: 'POST', body: payload });
+  } catch (err) {
+    log.error('enviarListasPublicitarios falló:', err.message);
+    return { ok: false };
+  }
+}
+
 // Lectura remota (02/09/2026) — ver fetchMiembrosListasCategoria() en farmatic-client.js.
 async function enviarMiembrosListasCategoria(miembros) {
   try {
@@ -476,6 +485,7 @@ module.exports = {
   enviarRecepcionesDescuentoReal,
   enviarTopLaboratorios,
   getCambiosPendientes,
+  enviarListasPublicitarios,
   marcarCambiosProcesados,
   // getListaNegraPendiente/marcarListaNegraProcesada estaban definidas pero nunca
   // exportadas — sync.js las llamaba vía api.getListaNegraPendiente() y siempre

@@ -1946,6 +1946,31 @@ async function fetchFavoritosListas() {
 // del lado del servidor (ya tiene cns.ch sincronizado) a partir de este envío más simple.
 // Independiente de fetchFavoritosListas(): si esta lectura falla, no debe afectar al flujo
 // de favoritos que ya funciona (getCategoriaLista/procesarCambiosPendientes).
+// Listas de PUBLICITARIOS + Lista Roja (24/09/2026): contenido crudo (lista, cn) de LIST_PUB_FAVORITOS /
+// VERDE / AMARILLO / GRIS y LIST_NEGRA, para que XestFarma se entere en cuanto se cambia algo directamente
+// en Farmatic. Devuelve también qué listas están configuradas en esta instalación (una lista sin
+// configurar NO es una lista vacía: el servidor no debe tocar nada de ella).
+async function fetchMiembrosListasPublicitarios() {
+  const mapa = { favoritos: 'LIST_PUB_FAVORITOS', verde: 'LIST_PUB_VERDE', amarillo: 'LIST_PUB_AMARILLO', gris: 'LIST_PUB_GRIS', rojo: 'LIST_NEGRA' };
+  const idAlista = new Map();
+  for (const [lista, envKey] of Object.entries(mapa)) {
+    const id = parseInt(process.env[envKey]);
+    if (Number.isFinite(id) && id > 0) idAlista.set(id, lista);
+  }
+  if (!idAlista.size) return { miembros: [], listas_configuradas: [] };
+  const p = await getPool();
+  const ids = [...idAlista.keys()].join(',');
+  const result = await p.request().query(`
+    SELECT i.XItem_IdLista AS lista, i.XItem_IdArticu AS cn
+    FROM ItemListaArticu i
+    WHERE i.XItem_IdLista IN (${ids})
+  `);
+  return {
+    miembros: result.recordset.map(r => ({ lista: idAlista.get(Number(r.lista)), cn: Number(r.cn) })),
+    listas_configuradas: [...new Set(idAlista.values())],
+  };
+}
+
 async function fetchMiembrosListasCategoria() {
   const lcat = getListaCategoria();
   if (!lcat) { log.info('fetchMiembrosListasCategoria omitido: wizard Listas no configurado'); return []; }
@@ -3721,6 +3746,7 @@ module.exports = {
   fetchComprasMensuales,
   fetchFavoritosListas,
   fetchMiembrosListasCategoria,
+  fetchMiembrosListasPublicitarios,
   fetchRecepcionesDescuentoReal,
   fetchFavoritosActuales,
   fetchTicketMedio,

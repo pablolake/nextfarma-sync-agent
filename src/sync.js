@@ -1417,6 +1417,38 @@ async function syncEncargosVencidos(apiClient, log) {
 // ventas/catálogo/recepciones ni sube nada pesado — eso es del ciclo nocturno (runSync).
 // Lanza si Farmatic no conecta, para que main.js pause los reintentos (un login fallido por
 // minuto podría bloquear la cuenta sa, ver comentario de PASO 1a en runSync).
+// Detección de cambios hechos directamente en Farmatic (24/09/2026, "deberia" mandarse cada vez que cambia):
+// en cada tick ligero se leen las listas (barato) y solo se ENVÍA a XestFarma si el contenido cambió desde el
+// último envío — favoritos y categorías de Receta, listas de Publicitarios y Lista Roja. El primer tick tras
+// arrancar envía siempre una vez.
+let _hashListasReceta = null, _hashListasPub = null;
+const _hash = (obj) => require('crypto').createHash('sha1').update(JSON.stringify(obj)).digest('hex');
+async function detectarCambiosListas() {
+  try {
+    const favoritos = await farmatic.fetchFavoritosListas();
+    const miembros = await farmatic.fetchMiembrosListasCategoria();
+    const h = _hash([favoritos, miembros]);
+    if (h !== _hashListasReceta) {
+      if (favoritos.length) { const r = await api.enviarFavoritos(favoritos); log.info(`Listas de Receta cambiaron en Farmatic → enviados (${r.updated ?? 0} GH actualizados)`); }
+      if (miembros.length) await api.enviarMiembrosListasCategoria(miembros);
+      _hashListasReceta = h;
+    }
+  } catch (e) { log.warn('Detección de cambios en listas de Receta omitida:', e.message); }
+  try {
+    const pub = await farmatic.fetchMiembrosListasPublicitarios();
+    if (pub.listas_configuradas.length) {
+      const h = _hash(pub);
+      if (h !== _hashListasPub) {
+        const r = await api.enviarListasPublicitarios(pub);
+        if (r && r.ok) {
+          log.info(`Listas de Publicitarios/Lista Roja cambiaron en Farmatic → favoritos GP ${r.favoritos_cambiados}, lista roja +${r.lista_roja_marcados}/-${r.lista_roja_desmarcados}`);
+          _hashListasPub = h;
+        }
+      }
+    }
+  } catch (e) { log.warn('Detección de cambios en listas de Publicitarios omitida:', e.message); }
+}
+
 let _mapeoEsquemaAt = 0;
 async function runLight() {
   await farmatic.getPool();
@@ -1426,6 +1458,7 @@ async function runLight() {
   }
   const avisos = [];
   await procesarColasPendientes(api, log, (m) => { avisos.push(m); log.warn('⚠ ' + m); });
+  await detectarCambiosListas();
   return { avisos };
 }
 
