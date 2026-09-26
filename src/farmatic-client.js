@@ -1971,6 +1971,20 @@ async function fetchMiembrosListasPublicitarios() {
   };
 }
 
+// Artículos con el tick "Preferido en búsquedas y sustituciones" de Farmatic (Articu.MarcaEx bit 0x4000 = 16384) —
+// es lo que se activa con la consulta SQL sobre los CN de una lista de favoritos (26/09/2026, farmacia Jose 2).
+// Solo LECTURA. IdArticu es el CN (texto en Farmatic).
+async function fetchArticulosPreferidosTick() {
+  const p = await getPool();
+  const r = await p.request().query(`SELECT IdArticu FROM Articu WHERE (MarcaEx & 16384) <> 0`);
+  const cns = [];
+  for (const row of r.recordset) {
+    const n = parseInt(String(row.IdArticu).trim(), 10);
+    if (Number.isFinite(n) && n > 0) cns.push(n);
+  }
+  return cns.sort((a, b) => a - b);
+}
+
 async function fetchMiembrosListasCategoria() {
   const lcat = getListaCategoria();
   if (!lcat) { log.info('fetchMiembrosListasCategoria omitido: wizard Listas no configurado'); return []; }
@@ -3747,6 +3761,7 @@ module.exports = {
   fetchFavoritosListas,
   fetchMiembrosListasCategoria,
   fetchMiembrosListasPublicitarios,
+  fetchArticulosPreferidosTick,
   fetchRecepcionesDescuentoReal,
   fetchFavoritosActuales,
   fetchTicketMedio,

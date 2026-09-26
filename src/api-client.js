@@ -193,6 +193,15 @@ async function enviarFavoritos(favoritos) {
   }
 }
 
+async function enviarPreferidosTick(cns) {
+  try {
+    return await request('/api/sync/preferidos-tick', { method: 'POST', body: { cns } });
+  } catch (err) {
+    log.error('enviarPreferidosTick falló:', err.message);
+    return null;
+  }
+}
+
 async function enviarListasPublicitarios(payload) {
   try {
     return await request('/api/sync/listas-publicitarios', { method: 'POST', body: payload });
@@ -486,6 +495,7 @@ module.exports = {
   enviarTopLaboratorios,
   getCambiosPendientes,
   enviarListasPublicitarios,
+  enviarPreferidosTick,
   marcarCambiosProcesados,
   // getListaNegraPendiente/marcarListaNegraProcesada estaban definidas pero nunca
   // exportadas — sync.js las llamaba vía api.getListaNegraPendiente() y siempre

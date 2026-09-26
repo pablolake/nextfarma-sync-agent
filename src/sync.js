@@ -1421,7 +1421,7 @@ async function syncEncargosVencidos(apiClient, log) {
 // en cada tick ligero se leen las listas (barato) y solo se ENVÍA a XestFarma si el contenido cambió desde el
 // último envío — favoritos y categorías de Receta, listas de Publicitarios y Lista Roja. El primer tick tras
 // arrancar envía siempre una vez.
-let _hashListasReceta = null, _hashListasPub = null;
+let _hashListasReceta = null, _hashListasPub = null, _hashTick = null, _tickActivo = false, _tickCfgAt = 0;
 const _hash = (obj) => require('crypto').createHash('sha1').update(JSON.stringify(obj)).digest('hex');
 async function detectarCambiosListas() {
   try {
@@ -1434,6 +1434,25 @@ async function detectarCambiosListas() {
       _hashListasReceta = h;
     }
   } catch (e) { log.warn('Detección de cambios en listas de Receta omitida:', e.message); }
+  // Favoritos por TICK (Articu.MarcaEx & 0x4000): solo si el tenant lo tiene activado (config remota, se relee cada 10 min).
+  try {
+    if (Date.now() - _tickCfgAt > 10 * 60 * 1000) {
+      const cfg = await api.obtenerConfigSync();
+      _tickActivo = cfg?.farmatic_favoritos_por_tick === true;
+      _tickCfgAt = Date.now();
+    }
+    if (_tickActivo) {
+      const cns = await farmatic.fetchArticulosPreferidosTick();
+      const h = _hash(cns);
+      if (h !== _hashTick) {
+        const r = await api.enviarPreferidosTick(cns);
+        if (r && r.ok) {
+          if (r.receta_cambiados || r.publicitarios_cambiados) log.info(`Tick "preferido" en Farmatic → favoritos: Receta ${r.receta_cambiados}, Publicitarios ${r.publicitarios_cambiados} (${r.recien_marcados} CN recién marcados)`);
+          _hashTick = h;
+        }
+      }
+    }
+  } catch (e) { log.warn('Detección de favoritos por tick omitida:', e.message); }
   try {
     const pub = await farmatic.fetchMiembrosListasPublicitarios();
     if (pub.listas_configuradas.length) {
