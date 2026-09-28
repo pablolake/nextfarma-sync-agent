@@ -594,6 +594,14 @@ async function runSync(opts = {}) {
           if (d.cofares_directo && prod.pvl != null) {
             prod.pc_cofares = +(prod.pvl * (1 - (d.dto_pct || 0))).toFixed(4);
           }
+          // pvf del propio modelo Directo, campo NUEVO y aparte de pc_cofares de arriba (29/09/2026,
+          // guía de extracción validada en El Carmen: "el campo pvf de Models ya es el neto previsto,
+          // no hay que calcular nada") — evita el error real documentado (Memantina Kern 20mg 56:
+          // previsto 27,82€ vía pvl×dto, cobrado 31,36€; en genéricos caros de Selección Genéricos la
+          // base es PVF, no PVL). pc_cofares (arriba) sigue siendo el puente de Publicitarios, sin
+          // tocar — este es el dato nuevo para que Receta decida si lo usa.
+          if (d.pvf_directo != null) prod.pvf_directo_4db = d.pvf_directo;
+          if (d.margen_especial_4db) prod.margen_especial_4db = true;
           // NEXO (07/09/2026, ver comentario en fetch4DBDescuentos) — canal de compra
           // independiente de COFARES DIRECTO, con su propia fórmula de precio (PVF real del
           // propio modelo, no PVL). Se manda el dto y el pvf crudos; el servidor decide el

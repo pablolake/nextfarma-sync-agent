@@ -1510,6 +1510,15 @@ async function fetch4DBDescuentos(modeloReceta) {
   // farmatic_4db_modelo_receta en nextfarma-api, leída en sync.js vía obtenerConfigSync) con
   // 'COFARES DIRECTO' como valor por defecto — mismo comportamiento de siempre para cualquier
   // tenant sin configurar explícitamente.
+  // Predicción fiel a la guía de extracción validada en El Carmen (29/09/2026, septiembre 2026,
+  // 6.649 líneas de albarán): por CN+modelo se queda con la fila de MENOR discountBaseUnits (el
+  // escalón que SIEMPRE se alcanza, sin importar cuánto se pida) y, si hay empate, la de menor
+  // prioridad — nunca el descuento MÁXIMO sin más, que antes podía no ser alcanzable. `pvf` de
+  // Models ya es el neto previsto, no hace falta recalcularlo desde el descuento. `discount=0,001`
+  // se conserva tal cual (marca propia en el acuerdo, sin descuento real, pero SÍ pertenece al
+  // modelo — cuenta para Más Cofares). margenEsp='M' del catálogo viaja aparte, más fiable que la
+  // regla de PVP>143,05€ que usa el servidor (columna de texto: 'M' o espacio, no se puede tratar
+  // como número).
   const result = await p.request()
     .input('catalogo', sql.Int, catalogo)
     .input('modeloReceta', sql.VarChar, modeloReceta || 'COFARES DIRECTO')
@@ -1517,27 +1526,24 @@ async function fetch4DBDescuentos(modeloReceta) {
       SELECT
         LTRIM(RTRIM(CAST(cat.codigoNacional AS VARCHAR))) AS cn,
         cat.pvl,
-        cd.discount AS dto_cofares,
-        nx.discount AS dto_nexo,
-        nx.pvf      AS pvf_nexo
+        RTRIM(cat.margenEsp) AS margen_esp,
+        cd.discount AS dto_cofares, cd.pvf AS pvf_cofares,
+        nx.discount AS dto_nexo,    nx.pvf AS pvf_nexo
       FROM _4DB_CAT_CatalogoArt cat
       LEFT JOIN (
-        SELECT codigonacional, MAX(discount) AS discount
-        FROM _4DB_CAT_Models
-        WHERE catalogo = @catalogo
-          AND nombre = @modeloReceta
-        GROUP BY codigonacional
-      ) cd ON cd.codigonacional = cat.codigoNacional
+        SELECT m.codigonacional, m.discount, m.pvf,
+               ROW_NUMBER() OVER (PARTITION BY m.codigonacional ORDER BY m.discountBaseUnits ASC, m.prioridad ASC) AS rn
+        FROM _4DB_CAT_Models m
+        WHERE m.catalogo = @catalogo AND m.nombre = @modeloReceta
+      ) cd ON cd.codigonacional = cat.codigoNacional AND cd.rn = 1
       LEFT JOIN (
         -- pvf real del propio modelo NEXO (no cat.pvl) — Nexo es PVF + descuento, un canal de
         -- compra distinto con precio base propio, no el PVL de la ficha general del artículo.
-        SELECT m.codigonacional, MAX(m.discount) AS discount,
-               MAX(m.pvf) AS pvf
+        SELECT m.codigonacional, m.discount, m.pvf,
+               ROW_NUMBER() OVER (PARTITION BY m.codigonacional ORDER BY m.discountBaseUnits ASC, m.prioridad ASC) AS rn
         FROM _4DB_CAT_Models m
-        WHERE m.catalogo = @catalogo
-          AND m.nombre = 'NEXO'
-        GROUP BY m.codigonacional
-      ) nx ON nx.codigonacional = cat.codigoNacional
+        WHERE m.catalogo = @catalogo AND m.nombre = 'NEXO'
+      ) nx ON nx.codigonacional = cat.codigoNacional AND nx.rn = 1
       WHERE cat.catalogo = @catalogo AND cat.iva = 'S'
     `);
 
@@ -1554,8 +1560,14 @@ async function fetch4DBDescuentos(modeloReceta) {
     pvl_4db:         r.pvl != null ? +Number(r.pvl).toFixed(4) : null,
     cofares_directo: r.dto_cofares != null,
     dto_pct:         normalizaDto(r.dto_cofares) || 0,
+    // pvf del modelo Directo — el neto previsto ya resuelto por Cofares, sin recalcular (guía,
+    // sección 2 "Reglas de predicción"). Server decide si lo usa o sigue derivando de pvl×dto.
+    pvf_directo:     r.pvf_cofares != null ? +Number(r.pvf_cofares).toFixed(4) : null,
     dto_nexo:        normalizaDto(r.dto_nexo),
     pvf_nexo:        r.pvf_nexo != null ? +Number(r.pvf_nexo).toFixed(4) : null,
+    // true solo si el catálogo trae 'M' de verdad (columna de texto, nunca vacío/espacio) — más
+    // fiable que la regla de PVP>143,05€ que aplica el servidor cuando esto no llega.
+    margen_especial_4db: (r.margen_esp || '').trim().toUpperCase() === 'M',
   })).filter(r => /^\d{5,}$/.test(r.codigo_nacional));
 
   return { registros, modelos };
