@@ -1032,22 +1032,13 @@ async function mostradorSeleccionar(cn) {
   mostradorRenderDetalle(res.gp);
 }
 
-// Mismo semáforo que lib/publicitariosColor.ts en la app web (31/08/2026, regla del titular):
-// verde = mejor margen del grupo, amarillo = 2º mejor margen, gris = cualquier otro con más
-// margen que el favorito (a partir del 3er puesto). El favorito ya no es el punto de partida
-// del semáforo, solo la referencia para "gris" — su propio badge FAVORITO ya lo señala aparte.
-function mostradorColorTier(cn, cns, favoritoCn) {
-  if (cn.mu === null || cn.mu === undefined) return null;
-  const ordenados = cns
-    .filter(c => c.mu !== null && c.mu !== undefined)
-    .sort((a, b) => (b.mu - a.mu) || (b.uds_ytd - a.uds_ytd) || (a.cn - b.cn));
-  const rank = ordenados.findIndex(c => c.cn === cn.cn);
-  if (rank === 0) return 'verde';
-  if (rank === 1) return 'amarillo';
-  const favCn = cns.find(c => c.cn === favoritoCn);
-  const muFav = favCn ? favCn.mu : null;
-  if (muFav !== null && muFav !== undefined && cn.mu > muFav) return 'gris';
-  return null;
+// Color YA calculado en el servidor (28/09/2026, motor de tramos por Subfamilia — misma
+// especificación que usa la web y la sincronización VERDE/AMARILLO/GRIS con Farmatic). El
+// Mostrador ya NO recalcula nada por su cuenta: mostraba un semáforo propio (top-2 por margen
+// dentro de la banda) que podía no coincidir con lo que el titular ve en pantalla ni con lo
+// que se escribe en Farmatic — ahora los tres sitios usan el mismo cálculo.
+function mostradorColorTier(cn) {
+  return cn.color ?? null;
 }
 const MOSTRADOR_DOT_COLOR = { verde: 'var(--success)', amarillo: 'var(--warning)', gris: 'var(--muted)' };
 
@@ -1060,7 +1051,7 @@ function mostradorRenderDetalle(gp) {
 
   const filas = [...gp.cns].sort((a, b) => (b.mu ?? -Infinity) - (a.mu ?? -Infinity));
   document.getElementById('mostrador-tabla-body').innerHTML = filas.map(cn => {
-    const tier = gp.es_unico ? null : mostradorColorTier(cn, gp.cns, gp.favorito_cn);
+    const tier = gp.es_unico ? null : mostradorColorTier(cn);
     const esFav = cn.cn === gp.favorito_cn;
     return `
       <tr>
