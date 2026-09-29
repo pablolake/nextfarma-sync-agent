@@ -3125,7 +3125,19 @@ async function completarFavoritosConMasVendido(categoriasActuales) {
   return { favoritos_completados: completados };
 }
 
-async function procesarCambiosPendientes(cambios) {
+// Marca el tick "Preferido en búsquedas y sustituciones" (Articu.MarcaEx bit 0x4000) de un CN —
+// escritura, hermana de fetchArticulosPreferidosTick (solo lectura). Aditivo a propósito, igual
+// que el propio script SQL del titular: solo ENCIENDE el bit, nunca lo apaga en el CN que deja de
+// ser favorito — así un tick puesto a mano por el titular en Farmatic nunca se pierde por un
+// cambio hecho desde XestFarma. Solo se llama para tenants con farmatic_favoritos_por_tick=TRUE.
+async function marcarTickFavorito(cn) {
+  const p = await getPool();
+  await p.request()
+    .input('cn', sql.Int, cn)
+    .query(`UPDATE Articu SET MarcaEx = MarcaEx | 0x4000 WHERE IdArticu = @cn AND (MarcaEx & 0x4000) = 0`);
+}
+
+async function procesarCambiosPendientes(cambios, tickActivo = false) {
   if (!cambios || cambios.length === 0) return { procesados: 0, errores: 0, ids_procesados: [] };
   const listas = getCategoriaLista();
   if (!listas) {
@@ -3206,6 +3218,16 @@ async function procesarCambiosPendientes(cambios) {
       } catch (errTx) {
         await tx.rollback().catch(() => {});
         throw errTx;
+      }
+
+      // Aplicar tick (29/09/2026, petición explícita del titular): en farmacias con favoritos por
+      // tick, un cambio hecho DESDE XestFarma también debe reflejarse en el tick de Farmatic, no
+      // solo en la lista — si no, el próximo ciclo de lectura del tick (fetchArticulosPreferidosTick)
+      // vería el CN viejo sin tick y el nuevo sin tick, y no tendría con qué confirmar el cambio.
+      // Best-effort: un fallo aquí no debe tirar el cambio de favorito/lista, que ya se aplicó bien.
+      if (tickActivo) {
+        try { await marcarTickFavorito(favorito_cn_nuevo); }
+        catch (errTick) { log.warn(`No se pudo aplicar el tick al CN ${favorito_cn_nuevo}: ${errTick.message}`); }
       }
 
       log.info(`Cambio procesado: CH ${ch} CN ${favorito_cn_nuevo} lista ${listaDestino} (${categoria_nueva})`);
@@ -3784,6 +3806,7 @@ module.exports = {
   fetchAcuerdosDescuento,
   fetchPublicitariosGP,
   procesarCambiosPendientes,
+  marcarTickFavorito,
   procesarStockPendientes,
   procesarListaNegraPendiente,
   getCategoriaLista,

@@ -1145,7 +1145,12 @@ async function procesarColasPendientes(api, log, warn) {
     const { cambios } = await api.getCambiosPendientes();
     if (cambios && cambios.length > 0) {
       log.info('Cambios pendientes: ' + cambios.length + ' a procesar');
-      const r = await farmatic.procesarCambiosPendientes(cambios);
+      // Favoritos por tick (29/09/2026, petición explícita del titular): "a partir de ahi un
+      // cambio en xestfarma implica guardarse en lista y aplicar tick" — un cambio de favorito
+      // hecho en la app también marca el tick del CN nuevo en Farmatic, no solo la lista.
+      let tickActivo = false;
+      try { tickActivo = (await api.obtenerConfigSync())?.farmatic_favoritos_por_tick === true; } catch {}
+      const r = await farmatic.procesarCambiosPendientes(cambios, tickActivo);
       log.info(`Cambios procesados: ${r.procesados} OK, ${r.errores} errores`);
       if (r.ids_procesados && r.ids_procesados.length > 0) {
         await api.marcarCambiosProcesados(r.ids_procesados);
