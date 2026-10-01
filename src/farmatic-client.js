@@ -3125,16 +3125,36 @@ async function completarFavoritosConMasVendido(categoriasActuales) {
   return { favoritos_completados: completados };
 }
 
-// Marca el tick "Preferido en búsquedas y sustituciones" (Articu.MarcaEx bit 0x4000) de un CN —
-// escritura, hermana de fetchArticulosPreferidosTick (solo lectura). Aditivo a propósito, igual
-// que el propio script SQL del titular: solo ENCIENDE el bit, nunca lo apaga en el CN que deja de
-// ser favorito — así un tick puesto a mano por el titular en Farmatic nunca se pierde por un
-// cambio hecho desde XestFarma. Solo se llama para tenants con farmatic_favoritos_por_tick=TRUE.
-async function marcarTickFavorito(cn) {
+// Marca el tick "Preferido en búsquedas y sustituciones" (Articu.MarcaEx bit 0x4000) del nuevo
+// favorito y, si se pasa cnAnterior, apaga el del que deja de serlo — escritura, hermana de
+// fetchArticulosPreferidosTick (solo lectura).
+// CAMBIO (01/10/2026, petición explícita — "cada cambio de fav implique desactivar el
+// Articu.MarcaEx 0x4000 del anterior fav y ponérselo al nuevo, a parte de sacar al viejo de las
+// listas y poner el nuevo"): antes era aditivo a propósito (solo encendía el bit, nunca lo
+// apagaba) para no perder un tick puesto a mano en Farmatic. En la práctica eso hacía que CADA
+// cambio de favorito hecho desde XestFarma (incluida la propia reconstrucción algorítmica, no
+// solo manual) dejara el tick viejo encendido para siempre — confirmado con datos reales de Jose
+// 2: 154 de 1.373 GH con 2+ CN ticked a la vez. Ahora se apaga el del anterior igual que ya se
+// saca de las listas (mismo criterio, misma transacción): un GH debe tener como mucho un tick
+// vigente, el de su favorito actual.
+async function marcarTickFavorito(cn, cnAnterior) {
   const p = await getPool();
-  await p.request()
-    .input('cn', sql.Int, cn)
-    .query(`UPDATE Articu SET MarcaEx = MarcaEx | 0x4000 WHERE IdArticu = @cn AND (MarcaEx & 0x4000) = 0`);
+  const tx = new sql.Transaction(p);
+  await tx.begin();
+  try {
+    await new sql.Request(tx)
+      .input('cn', sql.Int, cn)
+      .query(`UPDATE Articu SET MarcaEx = MarcaEx | 0x4000 WHERE IdArticu = @cn AND (MarcaEx & 0x4000) = 0`);
+    if (cnAnterior && cnAnterior !== cn) {
+      await new sql.Request(tx)
+        .input('cn', sql.Int, cnAnterior)
+        .query(`UPDATE Articu SET MarcaEx = MarcaEx & ~0x4000 WHERE IdArticu = @cn AND (MarcaEx & 0x4000) <> 0`);
+    }
+    await tx.commit();
+  } catch (err) {
+    await tx.rollback().catch(() => {});
+    throw err;
+  }
 }
 
 async function procesarCambiosPendientes(cambios, tickActivo = false) {
@@ -3224,9 +3244,10 @@ async function procesarCambiosPendientes(cambios, tickActivo = false) {
       // tick, un cambio hecho DESDE XestFarma también debe reflejarse en el tick de Farmatic, no
       // solo en la lista — si no, el próximo ciclo de lectura del tick (fetchArticulosPreferidosTick)
       // vería el CN viejo sin tick y el nuevo sin tick, y no tendría con qué confirmar el cambio.
+      // Se apaga el tick del anterior igual que ya se le saca de las listas arriba (01/10/2026).
       // Best-effort: un fallo aquí no debe tirar el cambio de favorito/lista, que ya se aplicó bien.
       if (tickActivo) {
-        try { await marcarTickFavorito(favorito_cn_nuevo); }
+        try { await marcarTickFavorito(favorito_cn_nuevo, favorito_cn_anterior); }
         catch (errTick) { log.warn(`No se pudo aplicar el tick al CN ${favorito_cn_nuevo}: ${errTick.message}`); }
       }
 
