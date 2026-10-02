@@ -1864,6 +1864,13 @@ const CATEGORIA_ENV = {
 // gris, ver asignarColoresPorMU en nextfarma-api) — clasificación independiente de la
 // categoría de rotación: un mismo CN favorito puede estar a la vez en su lista de categoría
 // (p.ej. MAX_ROTACION_A) y en su lista de color (p.ej. VERDE).
+// COMPARTIDO entre Receta y Publicitarios (02/10/2026, petición explícita de Jose: "se meten
+// publicitarios y receta juntos" — ver XF_LABEL más abajo para el porqué del esquema de 12
+// listas). Antes Publicitarios tenía su propio PUBLICITARIOS_COLOR_ENV (LIST_PUB_VERDE/...)
+// con un significado distinto (TODOS los CN del grupo, no solo el favorito) — eso habría
+// ensuciado estas 3 listas compartidas con miles de no-favoritos, así que
+// reconciliarColoresPublicitarios se restringió a solo el favorito de cada grupo (ver ahí) y
+// ahora reutiliza este mismo COLOR_ENV, igual que Receta.
 const COLOR_ENV = {
   verde:    'LIST_COLOR_VERDE',
   amarillo: 'LIST_COLOR_AMARILLO',
@@ -1871,29 +1878,71 @@ const COLOR_ENV = {
   negro:    'LIST_COLOR_NEGRO',
 };
 
-// Publicitarios (30/08/2026) — mismo patrón que COLOR_ENV, pero SIN 'rojo': el rojo de
-// Publicitarios es la Lista Roja MANUAL (LIST_NEGRA, compartida con Receta), gestionada
-// aparte por procesarListaNegraPendiente — nunca por esta reconciliación automática, para no
-// arriesgar que se borre por error una entrada puesta a mano (ver reconciliarColoresPublicitarios).
-const PUBLICITARIOS_COLOR_ENV = {
-  verde:    'LIST_PUB_VERDE',
-  amarillo: 'LIST_PUB_AMARILLO',
-  gris:     'LIST_PUB_GRIS',
-};
-// FAVORITOS de Publicitarios — un único bucket, no varía por grupo (a diferencia de
-// CATEGORIA_ENV, que tiene 7). Mismo criterio "insertar si falta, nunca recalcular sola" que
-// las categorías de Receta (ver sembrarFavoritosEnListas): el favorito es una elección
-// explícita del titular, no un dato derivado que haya que reconciliar cada ciclo.
-const PUBLICITARIOS_FAVORITOS_ENV = { favoritos: 'LIST_PUB_FAVORITOS' };
-
 // Lista Roja (30/08/2026) — hasta ahora LIST_NEGRA solo se podía asignar a mano en el wizard
 // a una lista YA EXISTENTE en Farmatic (nunca se autocreaba, a diferencia de categoría/color).
-// Con el nuevo esquema de 5 listas (FAVORITOS/VERDE/AMARILLO/GRIS/ROJO) para Publicitarios,
-// ROJO también debe autocrearse si falta — mismo patrón que las demás. Si una farmacia YA
-// tiene LIST_NEGRA configurada (caso real: jose, con sus propias listas), esto no toca nada
+// Ahora también se autocrea si falta, mismo patrón que las demás. Si una farmacia YA tiene
+// LIST_NEGRA configurada (caso real: jose, con sus propias listas), esto no toca nada
 // (asegurarListas solo crea lo que falta en el envMap, nunca reemplaza lo ya configurado).
 const LISTA_ROJA_ENV = { rojo: 'LIST_NEGRA' };
 const asegurarListaRoja = () => asegurarListas(LISTA_ROJA_ENV);
+
+// Las 12 listas XF (02/10/2026, petición explícita de Jose — "tengo miles de listas que se
+// llaman igual y es un caos... XF STAR / XF MARGEN A / XF ROTACIÓN A / XF ROTACIÓN B /
+// XF CONSOLIDADO / XF RESTO / XF PARADO / XF VERDE / XF AMARILLO / XF GRIS / XF NEGRO /
+// XF ROJO. Y ya. Se meten publicitarios y receta juntos"): nombre visible SIN guion (antes
+// "NF - INCENTIVADOS_STAR"; ahora "XF STAR") y con el texto natural que pidió, no la clave
+// interna cruda — ver resolverNombreLista más abajo, que es quien realmente usa este mapa.
+// Las claves (INCENTIVADOS_STAR, verde...) siguen siendo las de siempre: solo cambia cómo se
+// NOMBRAN en Farmatic, nunca el dato interno que ya usa el resto del código.
+const XF_LABEL = {
+  INCENTIVADOS_STAR: 'STAR',
+  INCENTIVADOS:       'MARGEN A',
+  MAX_ROTACION_A:     'ROTACIÓN A',
+  MAX_ROTACION_B:     'ROTACIÓN B',
+  CONSOLIDADO:        'CONSOLIDADO',
+  RESTO:              'RESTO',
+  PARADOS:            'PARADO',
+  verde:              'VERDE',
+  amarillo:           'AMARILLO',
+  gris:               'GRIS',
+  negro:              'NEGRO',
+  rojo:               'ROJO',
+};
+
+// Color visual de la lista en Farmatic (dbo.RepresentaColor, documento del titular 02/10/2026)
+// — círculo que se ve junto a la lista, independiente de qué artículos contenga. Entorno='L'
+// (lista; 'A' es el color individual de artículo, no se toca). Solo los 5 buckets de color
+// llevan círculo — las 7 de categoría no tienen un color propio que pintar.
+const XF_REPRESENTA_COLOR = {
+  verde:    4259584,
+  amarillo: 65535,
+  gris:     12632256,
+  negro:    0,
+  rojo:     255,
+};
+// Asigna (o cambia) el color de una lista en RepresentaColor — UPDATE si ya hay fila para esa
+// lista, INSERT si no. Best-effort a propósito (igual que el resto de "aplicar X en Farmatic"
+// de este fichero): si RepresentaColor no existe en esta instalación o la escritura falla, se
+// loguea y se sigue — la lista en sí ya se creó bien, el círculo de color es un extra visual,
+// nunca debe tirar abajo la creación/siembra de la lista.
+async function aplicarColorALista(idLista, colorRGB) {
+  const p = await getPool();
+  const tblR = await p.request().query(`SELECT name FROM sys.tables WHERE name = 'RepresentaColor'`).catch(() => ({ recordset: [] }));
+  if (!tblR.recordset.length) return { ok: false, motivo: 'no existe RepresentaColor' };
+  try {
+    const idStr = String(idLista);
+    const upd = await p.request().input('id', sql.VarChar, idStr).input('color', sql.Int, colorRGB)
+      .query(`UPDATE RepresentaColor SET Color = @color, Mostrar = 1 WHERE Entorno = 'L' AND IdCodigo = @id`);
+    if (!upd.rowsAffected?.[0]) {
+      await p.request().input('id', sql.VarChar, idStr).input('color', sql.Int, colorRGB)
+        .query(`INSERT INTO RepresentaColor (IdCodigo, Entorno, Color, Mostrar) VALUES (@id, 'L', @color, 1)`);
+    }
+    return { ok: true };
+  } catch (err) {
+    log.warn(`No se pudo aplicar color a la lista ${idLista} en RepresentaColor:`, err.message);
+    return { ok: false, motivo: err.message };
+  }
+}
 
 // Categorías que ni la config guardada ni la detección por nombre han resuelto todavía
 // (sin env var puesta). Se usa para avisar al titular en el SaaS de que puede terminar
@@ -1958,12 +2007,16 @@ async function fetchFavoritosListas() {
 // del lado del servidor (ya tiene cns.ch sincronizado) a partir de este envío más simple.
 // Independiente de fetchFavoritosListas(): si esta lectura falla, no debe afectar al flujo
 // de favoritos que ya funciona (getCategoriaLista/procesarCambiosPendientes).
-// Listas de PUBLICITARIOS + Lista Roja (24/09/2026): contenido crudo (lista, cn) de LIST_PUB_FAVORITOS /
-// VERDE / AMARILLO / GRIS y LIST_NEGRA, para que XestFarma se entere en cuanto se cambia algo directamente
-// en Farmatic. Devuelve también qué listas están configuradas en esta instalación (una lista sin
-// configurar NO es una lista vacía: el servidor no debe tocar nada de ella).
+// Listas de PUBLICITARIOS + Lista Roja (24/09/2026; compartidas con Receta desde el 02/10/2026):
+// contenido crudo (lista, cn) de VERDE/AMARILLO/GRIS (ahora LIST_COLOR_*, las mismas que ya lee
+// Receta) y LIST_NEGRA, para que XestFarma se entere en cuanto se cambia algo directamente en
+// Farmatic. Como son las MISMAS listas físicas que Receta, cada lado (este endpoint vía
+// /api/sync/listas-publicitarios, y el de Receta vía /api/sync/favoritos) solo actúa sobre los
+// CN que de verdad pertenecen a su propio universo (GP o GH) — un CN del otro módulo no
+// encuentra match y se ignora en silencio, sin conflicto. 'favoritos' (LIST_PUB_FAVORITOS) ya
+// no existe como lista propia — estar en VERDE/AMARILLO/GRIS ya implica ser favorito.
 async function fetchMiembrosListasPublicitarios() {
-  const mapa = { favoritos: 'LIST_PUB_FAVORITOS', verde: 'LIST_PUB_VERDE', amarillo: 'LIST_PUB_AMARILLO', gris: 'LIST_PUB_GRIS', rojo: 'LIST_NEGRA' };
+  const mapa = { verde: 'LIST_COLOR_VERDE', amarillo: 'LIST_COLOR_AMARILLO', gris: 'LIST_COLOR_GRIS', rojo: 'LIST_NEGRA' };
   const idAlista = new Map();
   for (const [lista, envKey] of Object.entries(mapa)) {
     const id = parseInt(process.env[envKey]);
@@ -2582,39 +2635,38 @@ async function obtenerForeignKeys(p, tabla) {
   return r.recordset;
 }
 
-// Prefijo por familia (21/09/2026, petición explícita del titular tras el rebrand a
-// XestFarma: "a partir de ahora en las farmas nuevas cambiemos el prefijo") — "NF"/"NF Pub"
-// es el histórico, "XF"/"XF Pub" el actual. Una farmacia que YA tiene alguna lista con el
-// prefijo histórico de esa familia sigue usándolo para cualquier lista nueva que le falte —
-// nunca se mezclan "NF - X" y "XF - Y" dentro de la misma instalación. Solo una farmacia sin
-// NINGUNA lista de esa familia todavía (instalación nueva de verdad, o una que solo usa la
-// otra familia) arranca ya con el prefijo actual. Deliberadamente no migra nada: las listas
-// "NF - X" ya creadas en farmacias existentes se quedan así para siempre, a menos que se
-// decida lo contrario más adelante (ver homologarNombresListas para el precedente de cómo se
-// haría una migración real, gated y explícita).
-async function resolverPrefijoListas(p, colNombre, familia) {
-  const legacy = familia === 'pub' ? 'NF Pub' : 'NF';
-  const actual = familia === 'pub' ? 'XF Pub' : 'XF';
+// Prefijo (21/09/2026, petición explícita del titular tras el rebrand a XestFarma: "a partir
+// de ahora en las farmas nuevas cambiemos el prefijo") — "NF" es el histórico, "XF" el
+// actual. Una farmacia que YA tiene alguna lista "NF - X" sigue usando ese prefijo (con el
+// formato de nombre legacy, CON guion) para cualquier lista nueva que le falte — nunca se
+// mezclan "NF - X" y "XF Y" dentro de la misma instalación. Solo una farmacia sin NINGUNA
+// lista "NF - %" todavía (instalación nueva de verdad, o una que ya las borró todas — caso
+// real Jose, 02/10/2026: "la voy a borrar todas... me las creas tú") arranca con el prefijo
+// actual y el formato de nombre nuevo (ver resolverNombreLista). Deliberadamente no migra
+// nada solo: las listas "NF - X" ya creadas se quedan así para siempre salvo homologación
+// explícita (ver homologarNombresListas).
+// 02/10/2026: ya NO distingue familia 'base'/'pub' — Receta y Publicitarios comparten ahora
+// las mismas 12 listas XF (petición explícita: "se meten publicitarios y receta juntos"),
+// así que ya no hace falta un prefijo distinto para no chocar de nombre.
+async function resolverPrefijoListas(p, colNombre) {
   const r = await p.request()
-    .input('patron', sql.VarChar, `${legacy} - %`)
+    .input('patron', sql.VarChar, `NF - %`)
     .query(`SELECT TOP 1 1 AS x FROM ListaArticu WHERE ${colNombre} LIKE @patron`)
     .catch(() => ({ recordset: [] }));
-  return r.recordset.length ? legacy : actual;
+  return r.recordset.length ? 'NF' : 'XF';
+}
+// Nombre visible de una lista: formato legacy "NF - BUCKET" (prefijo histórico, nunca se
+// retoca) o el nuevo "XF ETIQUETA" sin guion y con el texto natural de XF_LABEL (petición
+// explícita de Jose, ver XF_LABEL). `bucket` es la clave interna (INCENTIVADOS_STAR, verde...).
+function resolverNombreLista(prefijo, bucket) {
+  return prefijo === 'XF' ? `XF ${XF_LABEL[bucket] || bucket}` : `NF - ${bucket}`;
 }
 
-// Genérico: crea (si faltan) las listas de un "esquema" bucket→env var — usado tanto para
-// las 7 de categoría (CATEGORIA_ENV) como para las 3 de color de margen (COLOR_ENV). Mismo
-// nombre "NextFarma - {BUCKET}" en ambos casos, así que reutilizar esto en vez de duplicar
-// la función evita que un fix (p.ej. las columnas extra de ListaArticu) se aplique a una y
-// se olvide en la otra.
-// `familia` ('base' o 'pub') — Publicitarios usa las mismas claves de bucket que Receta
-// (verde/amarillo/gris) para que el resto del código pueda buscar por el color literal que
-// manda el backend, pero eso haría que ambos auto-crearan una lista con el MISMO nombre
-// visible si se usara la misma familia de prefijo — confuso para el titular mirando la
-// lista de Farmatic. La familia distingue el nombre sin tocar las claves; el prefijo real
-// de cada familia lo resuelve resolverPrefijoListas (ver más abajo) según si esta instalación
-// ya tiene o no listas con el prefijo histórico.
-async function asegurarListas(envMap, familia = 'base') {
+// Genérico: crea (si faltan) las listas de un "esquema" bucket→env var — usado para las 7 de
+// categoría (CATEGORIA_ENV), las 4 de color de margen (COLOR_ENV) y la Lista Roja
+// (LISTA_ROJA_ENV). Reutilizar esto en vez de duplicar la función evita que un fix (p.ej. las
+// columnas extra de ListaArticu) se aplique a una y se olvide en la otra.
+async function asegurarListas(envMap) {
   const p = await getPool();
 
   const tblR = await p.request().query(`SELECT name FROM sys.tables WHERE name = 'ListaArticu'`)
@@ -2690,20 +2742,40 @@ async function asegurarListas(envMap, familia = 'base') {
 
   const columnasBase = [colNombre, ...obligatoriasResueltas.map(c => c.nombre)];
 
+  // Detección de lista "fantasma" (02/10/2026, caso real Jose: "la voy a borrar todas... me
+  // las creas tú") — hasta ahora, una vez un bucket tenía su env var puesta, se consideraba
+  // "ya configurado" para siempre, aunque la lista hubiera desaparecido de Farmatic (borrada
+  // a mano). Sin esto, borrar las listas nunca las volvía a crear: el env var seguía apuntando
+  // a un IdLista que ya no existe. Se comprueba de una vez con un solo SELECT (no una consulta
+  // por bucket) y se limpia el env var de cualquiera que ya no exista, para que caiga en
+  // `faltantes` como si nunca se hubiera configurado.
+  const idsConfigurados = Object.entries(envMap)
+    .map(([bucket, envKey]) => ({ bucket, envKey, id: parseInt(process.env[envKey], 10) }))
+    .filter(x => Number.isInteger(x.id));
+  if (idsConfigurados.length) {
+    const existenR = await p.request().query(
+      `SELECT IdLista FROM ListaArticu WHERE IdLista IN (${idsConfigurados.map(x => x.id).join(',')})`
+    ).catch(() => ({ recordset: [] }));
+    const existentes = new Set(existenR.recordset.map(r => r.IdLista));
+    for (const x of idsConfigurados) {
+      if (!existentes.has(x.id)) {
+        log.warn(`La lista configurada para "${x.bucket}" (IdLista ${x.id}) ya no existe en Farmatic — se vuelve a crear.`);
+        delete process.env[x.envKey];
+      }
+    }
+  }
+
   const creadas = [];
   const fallos = [];
   const faltantes = Object.keys(envMap).filter(bucket => !process.env[envMap[bucket]]);
   // Resuelto una sola vez por llamada (no por bucket) — solo si de verdad hay algo que
   // crear, para no gastar una consulta de más en el caso normal (todo ya configurado).
-  const prefijoNombre = faltantes.length ? await resolverPrefijoListas(p, colNombre, familia) : null;
+  const prefijoNombre = faltantes.length ? await resolverPrefijoListas(p, colNombre) : null;
   for (const bucket of faltantes) {
-    // "NF"/"XF" (nunca el nombre completo) — Nombre de ListaArticu suele ser un VARCHAR muy
-    // corto (visto en producción/test: 22 caracteres). Con un prefijo largo tipo "XestFarma -
-    // " ya deja apenas hueco para nombres de bucket largos (INCENTIVADOS_STAR, MAX_ROTACION_A)
-    // y directamente desborda con el prefijo extra de Publicitarios ("XestFarma Publicitarios
-    // - verde" se vería truncado e indistinguible entre las 4 listas, mismo problema real que
-    // ya se vio con "NextFarma" antes de acortarlo). Dos letras dejadas libres para el resto.
-    const nombreLista = `${prefijoNombre} - ${bucket}`;
+    // Nombre de ListaArticu suele ser un VARCHAR muy corto (visto en producción/test: 22
+    // caracteres) — con nombres de bucket largos (INCENTIVADOS_STAR, MAX_ROTACION_A) el límite
+    // real importa; se recorta al hueco real en vez de arriesgarse a un truncamiento silencioso.
+    const nombreLista = resolverNombreLista(prefijoNombre, bucket);
     const nombreAjustado = (maxNombre > 0 && nombreLista.length > maxNombre)
       ? nombreLista.slice(0, maxNombre) : nombreLista;
     const columnas = [...columnasBase];
@@ -2739,6 +2811,10 @@ async function asegurarListas(envMap, familia = 'base') {
     if (resultado.ok && resultado.id) {
       creadas.push({ categoria: bucket, lista_id: resultado.id });
       process.env[envMap[bucket]] = String(resultado.id);
+      // Círculo de color (02/10/2026, documento del titular) — solo los buckets de color
+      // (verde/amarillo/gris/negro/rojo) tienen una entrada en XF_REPRESENTA_COLOR; las 7 de
+      // categoría no. Best-effort: aplicarColorALista ya loguea y sigue si falla.
+      if (XF_REPRESENTA_COLOR[bucket] != null) await aplicarColorALista(resultado.id, XF_REPRESENTA_COLOR[bucket]);
     } else if (!resultado.ok) {
       log.warn(`No se pudo crear la lista de ${bucket}:`, resultado.error);
       fallos.push(`${bucket}: ${resultado.error}`);
@@ -2754,8 +2830,6 @@ async function asegurarListas(envMap, familia = 'base') {
 }
 const asegurarListasCategoria = () => asegurarListas(CATEGORIA_ENV);
 const asegurarListasColor     = () => asegurarListas(COLOR_ENV);
-const asegurarListasColorPublicitarios = () => asegurarListas(PUBLICITARIOS_COLOR_ENV, 'pub');
-const asegurarListaFavoritosPublicitarios = () => asegurarListas(PUBLICITARIOS_FAVORITOS_ENV, 'pub');
 
 // Homologación de nombres (31/08/2026) — acción explícita, gated por su propio candado
 // (farmatic_homologar_nombres_listas), NUNCA automática por defecto: farmacias que ya usaban
@@ -2947,14 +3021,19 @@ async function reconciliarFavoritosColor(coloresActuales, favoritosReales) {
   };
 }
 
-// Publicitarios (30/08/2026) — a diferencia de Receta (reconciliarFavoritosColor: un color
-// por GH, el de su favorito), aquí CADA CN del grupo lleva su propio color (verde/amarillo/
-// gris), no solo el favorito — así el personal ve el color correcto de CUALQUIER producto que
-// mire en Farmatic, no solo el que ya está eligiendo. 'rojo' (Lista Roja manual, LIST_NEGRA)
-// se ignora aquí por completo — esa lista la gestiona solo procesarListaNegraPendiente, en su
-// propio pipeline; mezclarlas arriesgaría borrar por error una entrada puesta a mano.
+// Publicitarios (30/08/2026; restringido a solo el favorito el 02/10/2026) — antes CADA CN
+// del grupo llevaba su propio color (verde/amarillo/gris), no solo el favorito, para que el
+// personal viera el color correcto de cualquier producto que mirara en Farmatic. Eso dejó de
+// poder ser así al compartir listas con Receta (petición explícita de Jose: "se meten
+// publicitarios y receta juntos") — Receta solo mete el favorito de cada GH en estas listas
+// (reconciliarFavoritosColor), así que meter TODOS los CN de Publicitarios aquí las habría
+// llenado de miles de no-favoritos mezclados con los favoritos de Receta, rompiendo lo que
+// esas 3 listas significan ("mis favoritos, de un vistazo"). Ahora, igual que Receta, solo el
+// favorito de cada grupo entra. 'rojo' (Lista Roja manual, LIST_NEGRA) se ignora aquí por
+// completo — esa lista la gestiona solo procesarListaNegraPendiente, en su propio pipeline;
+// mezclarlas arriesgaría borrar por error una entrada puesta a mano.
 async function reconciliarColoresPublicitarios(grupos) {
-  const aseguradas = await asegurarListasColorPublicitarios();
+  const aseguradas = await asegurarListasColor();
   if (aseguradas.omitida) return aseguradas;
   const { creadas, fallos, listaIdPorBucket } = aseguradas;
   const p = await getPool();
@@ -2962,10 +3041,10 @@ async function reconciliarColoresPublicitarios(grupos) {
 
   const pares = [];
   for (const g of (grupos || [])) {
-    for (const c of (g.cns || [])) {
-      if (c.color === 'rojo') continue;
-      pares.push({ cn: c.cn, color: c.color });
-    }
+    if (g.favorito_cn == null) continue;
+    const fav = (g.cns || []).find(c => c.cn === g.favorito_cn);
+    if (!fav || fav.color === 'rojo') continue;
+    pares.push({ cn: fav.cn, color: fav.color });
   }
   if (!pares.length) return { creadas, fallos_creacion: fallos, coloreados: 0, movidos: 0, fallos_siembra: [] };
 
@@ -3031,17 +3110,12 @@ async function reconciliarColoresPublicitarios(grupos) {
   return { creadas, fallos_creacion: fallos, coloreados, movidos, fallos_siembra: fallosSiembra };
 }
 
-// FAVORITOS de Publicitarios — un solo bucket para todos los grupos (bucketPorChMap vacío
-// hace que sembrarFavoritosEnListas caiga siempre al bucketFallback 'favoritos'). La clave
-// no es un `ch` real, es "codconjunto:codccaa" — sembrarFavoritosEnListas es genérica, no le
-// importa qué forma tenga la clave mientras sea estable.
-function sembrarFavoritosPublicitarios(grupos) {
-  const favoritosPorGrupo = new Map();
-  for (const g of (grupos || [])) {
-    if (g.favorito_cn != null) favoritosPorGrupo.set(`${g.codconjunto}:${g.codccaa}`, g.favorito_cn);
-  }
-  return sembrarFavoritosEnListas(asegurarListaFavoritosPublicitarios, new Map(), favoritosPorGrupo, 'favoritos', 'favoritos Publicitarios');
-}
+// sembrarFavoritosPublicitarios (lista FAVORITOS dedicada, LIST_PUB_FAVORITOS) eliminada
+// (02/10/2026, "se meten publicitarios y receta juntos", ver reconciliarColoresPublicitarios):
+// con las 5 listas de color compartidas, estar en VERDE/AMARILLO/GRIS ya implica ser favorito
+// — una lista aparte solo para "es favorito" sin color quedaba redundante, y Jose no la pidió
+// entre las 12 (STAR/MARGEN A/ROTACIÓN A/ROTACIÓN B/CONSOLIDADO/RESTO/PARADO/VERDE/AMARILLO/
+// GRIS/NEGRO/ROJO).
 
 // Fase B — al FINAL del sync (con las ventas de este ciclo ya subidas): para los grupos
 // que sigan sin ningún favorito en su lista de categoría (ni real de fase A, ni puesto a
@@ -3840,7 +3914,6 @@ module.exports = {
   reconciliarFavoritosColor,
   completarFavoritosConMasVendido,
   reconciliarColoresPublicitarios,
-  sembrarFavoritosPublicitarios,
   asegurarListaRoja,
   homologarNombresListasCategoria,
   homologarNombresListasColor,

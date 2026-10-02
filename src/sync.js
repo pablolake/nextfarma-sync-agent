@@ -391,34 +391,17 @@ async function runSync(opts = {}) {
     warn('Homologación de nombres de listas omitida: ' + e.message);
   }
 
-  // Publicitarios (30/08/2026) — FAVORITOS/VERDE/AMARILLO/GRIS, candado PROPIO
-  // (farmatic_autocrear_listas_publicitarios) distinto del de Receta: son módulos separados,
-  // se pilotan por farmacia de forma independiente. ROJO no se toca aquí — es la Lista Roja
-  // manual (LIST_NEGRA), gestionada por su propio pipeline (lista-negra-pendiente) más abajo.
+  // Publicitarios (30/08/2026; unificado con Receta el 02/10/2026, "se meten publicitarios y
+  // receta juntos") — VERDE/AMARILLO/GRIS son ahora las MISMAS 3 listas que ya usa Receta
+  // (reconciliarColoresPublicitarios solo mete el favorito de cada grupo, igual que Receta;
+  // ver comentario ahí). Ya no hay lista FAVORITOS aparte (estar en una de las 3 de color ya
+  // implica ser favorito). Candado propio (farmatic_autocrear_listas_publicitarios) por si se
+  // quiere pilotar Publicitarios sin tocar Receta en una farmacia dada. ROJO no se toca aquí —
+  // es la Lista Roja manual (LIST_NEGRA), gestionada por su propio pipeline más abajo.
   try {
     const cfgTenant = await api.obtenerConfigSync();
     if (cfgTenant.farmatic_write_enabled && cfgTenant.farmatic_autocrear_listas_publicitarios) {
       const gruposColor = await api.obtenerColoresPublicitariosActuales();
-      const resultadoFav = await farmatic.sembrarFavoritosPublicitarios(gruposColor);
-      if (resultadoFav?.omitida) {
-        warn('Auto-creación de lista FAVORITOS de Publicitarios omitida: ' + resultadoFav.motivo);
-      } else {
-        if (resultadoFav.creadas?.length) {
-          listasPublicitariosCreadas = { ...(listasPublicitariosCreadas || {}), ...Object.fromEntries(resultadoFav.creadas.map(c => [c.categoria, c.lista_id])) };
-          await api.reportarListasCreadas({ listas: resultadoFav.creadas, favoritos_creados: resultadoFav.favoritos_creados });
-          ok(`Lista FAVORITOS de Publicitarios creada en Farmatic`);
-          await farmatic.fetchListasWizard()
-            .then(listasActualizadas => api.enviarSchemaInfo({ listas: listasActualizadas }))
-            .catch(e => warn('No se pudo actualizar la estructura tras crear la lista FAVORITOS de Publicitarios: ' + e.message));
-        }
-        if (resultadoFav.favoritos_creados > 0) {
-          ok(`Favoritos de Publicitarios sembrados en Farmatic: ${resultadoFav.favoritos_creados} de ${resultadoFav.favoritos_totales}`);
-        }
-        if (resultadoFav.fallos_siembra?.length) {
-          warn(`Fallos al sembrar ${resultadoFav.fallos_siembra.length} favoritos de Publicitarios: ${resultadoFav.fallos_siembra.slice(0, 5).join('; ')}`);
-        }
-      }
-
       const resultadoColorPub = await farmatic.reconciliarColoresPublicitarios(gruposColor);
       if (resultadoColorPub?.omitida) {
         warn('Auto-creación de listas de color de Publicitarios omitida: ' + resultadoColorPub.motivo);
