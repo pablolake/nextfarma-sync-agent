@@ -325,21 +325,21 @@ async function runSync(opts = {}) {
     warn('Auto-creación de listas (fase A) omitida: ' + e.message);
   }
 
-  // Listas de color de margen (VERDE/AMARILLO/GRIS, ver asignarColoresPorMU en
-  // nextfarma-api) — mismo patrón que las de categoría, solo favoritos reales (no hay
-  // "más vendido" para el color: es una propiedad del favorito ya elegido, no una
-  // alternativa a rankear), mismo doble candado de escritura.
+  // Listas de color de margen (VERDE/AMARILLO/GRIS, ver asignarColoresPorMU en nextfarma-api)
+  // — TODOS los CN de cada GH con su propio color, no solo el favorito (02/10/2026, petición
+  // explícita: "mejor no, no solo favs, todo los de ese color"; ver reconciliarCnsPorColor,
+  // compartida con Publicitarios más abajo).
   try {
     const cfgTenant = await api.obtenerConfigSync();
     if (cfgTenant.farmatic_write_enabled && cfgTenant.farmatic_autocrear_listas) {
       const colores = await api.obtenerColoresActuales();
-      const resultadoColor = await farmatic.reconciliarFavoritosColor(colores, favActuales);
+      const resultadoColor = await farmatic.reconciliarFavoritosColor(colores);
       if (resultadoColor?.omitida) {
         warn('Auto-creación de listas de color omitida: ' + resultadoColor.motivo);
       } else {
         if (resultadoColor.creadas.length) {
           listasColorCreadas = Object.fromEntries(resultadoColor.creadas.map(c => [c.categoria, c.lista_id]));
-          await api.reportarListasCreadas({ listas: resultadoColor.creadas, favoritos_creados: resultadoColor.favoritos_creados });
+          await api.reportarListasCreadas({ listas: resultadoColor.creadas, favoritos_creados: resultadoColor.coloreados });
           ok(`Listas de color creadas en Farmatic: ${resultadoColor.creadas.length}`);
           await farmatic.fetchListasWizard()
             .then(listasActualizadas => api.enviarSchemaInfo({ listas: listasActualizadas }))
@@ -348,14 +348,14 @@ async function runSync(opts = {}) {
         if (resultadoColor.fallos_creacion?.length) {
           warn(`No se pudieron crear ${resultadoColor.fallos_creacion.length} listas de color: ${resultadoColor.fallos_creacion.join('; ')}`);
         }
-        if (resultadoColor.favoritos_creados > 0) {
-          ok(`Favoritos reales sembrados por color en Farmatic: ${resultadoColor.favoritos_creados} de ${resultadoColor.favoritos_totales}`);
+        if (resultadoColor.coloreados > 0) {
+          ok(`CN coloreados en Farmatic: ${resultadoColor.coloreados}`);
         }
-        if (resultadoColor.favoritos_movidos > 0) {
-          ok(`Favoritos movidos de lista de color (cambió su color desde el último ciclo): ${resultadoColor.favoritos_movidos}`);
+        if (resultadoColor.movidos > 0) {
+          ok(`CN movidos de lista de color (cambió su color desde el último ciclo): ${resultadoColor.movidos}`);
         }
         if (resultadoColor.fallos_siembra?.length) {
-          warn(`Fallos al sembrar ${resultadoColor.fallos_siembra.length} favoritos por color: ${resultadoColor.fallos_siembra.slice(0, 5).join('; ')}${resultadoColor.fallos_siembra.length > 5 ? '…' : ''}`);
+          warn(`Fallos al colorear ${resultadoColor.fallos_siembra.length} CN: ${resultadoColor.fallos_siembra.slice(0, 5).join('; ')}${resultadoColor.fallos_siembra.length > 5 ? '…' : ''}`);
         }
       }
     }
@@ -392,12 +392,13 @@ async function runSync(opts = {}) {
   }
 
   // Publicitarios (30/08/2026; unificado con Receta el 02/10/2026, "se meten publicitarios y
-  // receta juntos") — VERDE/AMARILLO/GRIS son ahora las MISMAS 3 listas que ya usa Receta
-  // (reconciliarColoresPublicitarios solo mete el favorito de cada grupo, igual que Receta;
-  // ver comentario ahí). Ya no hay lista FAVORITOS aparte (estar en una de las 3 de color ya
-  // implica ser favorito). Candado propio (farmatic_autocrear_listas_publicitarios) por si se
-  // quiere pilotar Publicitarios sin tocar Receta en una farmacia dada. ROJO no se toca aquí —
-  // es la Lista Roja manual (LIST_NEGRA), gestionada por su propio pipeline más abajo.
+  // receta juntos") — VERDE/AMARILLO/GRIS son ahora las MISMAS 3 listas que ya usa Receta,
+  // con TODOS los CN de cada grupo (no solo el favorito — misma decisión que Receta, "mejor
+  // no, no solo favs, todo los de ese color"; ver reconciliarCnsPorColor). Ya no hay lista
+  // FAVORITOS aparte (estar en una de las 3 de color ya implica ser favorito). Candado propio
+  // (farmatic_autocrear_listas_publicitarios) por si se quiere pilotar Publicitarios sin tocar
+  // Receta en una farmacia dada. ROJO no se toca aquí — es la Lista Roja manual (LIST_NEGRA),
+  // gestionada por su propio pipeline más abajo.
   try {
     const cfgTenant = await api.obtenerConfigSync();
     if (cfgTenant.farmatic_write_enabled && cfgTenant.farmatic_autocrear_listas_publicitarios) {

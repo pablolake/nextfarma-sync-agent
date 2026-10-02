@@ -2945,107 +2945,25 @@ function sembrarFavoritosReales(categoriasActuales, favoritosReales) {
   return sembrarFavoritosEnListas(asegurarListasCategoria, categoriaPorCh, favoritosReales, 'RESTO', 'categoría');
 }
 
-// A diferencia de la categoría (una elección congelada del titular, nunca se recalcula sola
-// — ver sembrarFavoritosReales), el color es un dato derivado del descuento (dto) del
-// favorito, que puede cambiar de un ciclo a otro sin que nadie elija nada. Aquí no basta con
-// "insertar si falta": cada ciclo hay que
-// comprobar si el CN ya está en OTRA lista de color (porque cambió desde el ciclo anterior)
-// y, si es así, quitarlo de ahí antes de meterlo en la que le corresponde ahora — si no, un
-// CN que pasa de verde a gris se quedaría "duplicado" en las dos listas para siempre.
-async function reconciliarFavoritosColor(coloresActuales, favoritosReales) {
-  const aseguradas = await asegurarListasColor();
-  if (aseguradas.omitida) return aseguradas;
-  const { creadas, fallos, listaIdPorBucket } = aseguradas;
-  const p = await getPool();
-
-  const favoritosPorCh = favoritosReales instanceof Map ? favoritosReales : new Map();
-  const colorPorCh = new Map((coloresActuales || []).map(r => [Number(r.ch), r.color]));
-  const todasLasListasColor = [...listaIdPorBucket.values()];
-
-  const itemColsR = favoritosPorCh.size
-    ? await p.request().query(
-        `SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'ItemListaArticu'`
-      ).catch(() => ({ recordset: [] }))
-    : { recordset: [] };
-  const itemColsInfo = itemColsR.recordset;
-  const itemObligatorias = columnasObligatorias(itemColsInfo, new Set(['XItem_IdLista', 'XItem_IdArticu']));
-  const itemColumnasBase = ['XItem_IdLista', 'XItem_IdArticu', ...itemObligatorias.map(c => c.nombre)];
-  const itemValoresBase  = ['@lista', '@cn', ...itemObligatorias.map(c => c.valor)];
-
-  let favoritosCreados = 0;
-  let favoritosMovidos = 0;
-  let favoritosSinLista = 0;
-  const fallosSiembra = [];
-  for (const [ch, cn] of favoritosPorCh) {
-    const bucket  = colorPorCh.get(ch) || 'gris';
-    const listaId = listaIdPorBucket.get(bucket);
-    if (!listaId) { favoritosSinLista++; continue; }
-
-    const otras = todasLasListasColor.filter(id => id !== listaId);
-    if (otras.length) {
-      try {
-        const actualR = await p.request()
-          .input('cn', sql.Int, cn)
-          .query(`SELECT XItem_IdLista FROM ItemListaArticu WHERE XItem_IdArticu = @cn AND XItem_IdLista IN (${otras.join(',')})`);
-        for (const row of actualR.recordset) {
-          await p.request()
-            .input('lista', sql.Int, row.XItem_IdLista)
-            .input('cn',    sql.Int, cn)
-            .query(`DELETE FROM ItemListaArticu WHERE XItem_IdLista = @lista AND XItem_IdArticu = @cn`);
-          favoritosMovidos++;
-        }
-      } catch (err) {
-        log.warn(`No se pudo comprobar/mover CH ${ch} entre listas de color:`, err.message);
-      }
-    }
-
-    const resultado = await insertarConReintentoPorColumna(
-      p, 'ItemListaArticu', itemColsInfo, itemColumnasBase, itemValoresBase,
-      [{ nombre: 'lista', tipo: sql.Int, valor: listaId }, { nombre: 'cn', tipo: sql.Int, valor: cn }],
-      { guardSql: 'IF NOT EXISTS (SELECT 1 FROM ItemListaArticu WHERE XItem_IdLista = @lista AND XItem_IdArticu = @cn) ' }
-    );
-    if (resultado.ok) {
-      favoritosCreados++;
-    } else {
-      log.warn(`No se pudo sembrar favorito real de CH ${ch} (color):`, resultado.error);
-      fallosSiembra.push(`CH ${ch}: ${resultado.error}`);
-    }
-  }
-  if (creadas.length) log.info(`✓ Listas de color creadas en Farmatic: ${creadas.length}`);
-  if (favoritosCreados > 0) log.info(`✓ Favoritos reales sembrados (color): ${favoritosCreados}`);
-  if (favoritosMovidos > 0) log.info(`✓ Favoritos movidos de lista de color: ${favoritosMovidos}`);
-  return {
-    creadas, fallos_creacion: fallos, favoritos_creados: favoritosCreados,
-    favoritos_totales: favoritosPorCh.size, favoritos_sin_lista: favoritosSinLista,
-    favoritos_movidos: favoritosMovidos, fallos_siembra: fallosSiembra,
-  };
-}
-
-// Publicitarios (30/08/2026; restringido a solo el favorito el 02/10/2026) — antes CADA CN
-// del grupo llevaba su propio color (verde/amarillo/gris), no solo el favorito, para que el
-// personal viera el color correcto de cualquier producto que mirara en Farmatic. Eso dejó de
-// poder ser así al compartir listas con Receta (petición explícita de Jose: "se meten
-// publicitarios y receta juntos") — Receta solo mete el favorito de cada GH en estas listas
-// (reconciliarFavoritosColor), así que meter TODOS los CN de Publicitarios aquí las habría
-// llenado de miles de no-favoritos mezclados con los favoritos de Receta, rompiendo lo que
-// esas 3 listas significan ("mis favoritos, de un vistazo"). Ahora, igual que Receta, solo el
-// favorito de cada grupo entra. 'rojo' (Lista Roja manual, LIST_NEGRA) se ignora aquí por
-// completo — esa lista la gestiona solo procesarListaNegraPendiente, en su propio pipeline;
-// mezclarlas arriesgaría borrar por error una entrada puesta a mano.
-async function reconciliarColoresPublicitarios(grupos) {
+// Reconcilia TODOS los CN de un color (verde/amarillo/gris) contra las listas XF compartidas
+// — no solo el favorito (02/10/2026, petición explícita tras plantear el conflicto de
+// significado con Publicitarios: "mejor no, no solo favs, todo los de ese color" — se acepta
+// que las 5 listas ya no son "solo mis favoritos", son "todo lo que tiene ese color", igual en
+// Receta que en Publicitarios). Compartida entre reconciliarFavoritosColor (Receta: un color
+// por CN de cada GH, calculado en /api/sync/colores-actuales) y reconciliarColoresPublicitarios
+// (Publicitarios: un color por CN de cada GP) — mismo propósito, mismas 3 listas físicas.
+// Cada ciclo hay que comprobar si el CN ya está en OTRA lista de color (porque cambió desde el
+// ciclo anterior) y, si es así, quitarlo de ahí antes de meterlo en la que le corresponde
+// ahora — si no, un CN que pasa de verde a gris se quedaría "duplicado" para siempre. Un color
+// null (p. ej. Publicitarios: ni top-2 ni supera al favorito) saca el CN de TODAS las listas
+// de color en vez de dejarlo pegado donde estuviera.
+async function reconciliarCnsPorColor(pares, etiqueta) {
   const aseguradas = await asegurarListasColor();
   if (aseguradas.omitida) return aseguradas;
   const { creadas, fallos, listaIdPorBucket } = aseguradas;
   const p = await getPool();
   const todasLasListasColor = [...listaIdPorBucket.values()];
 
-  const pares = [];
-  for (const g of (grupos || [])) {
-    if (g.favorito_cn == null) continue;
-    const fav = (g.cns || []).find(c => c.cn === g.favorito_cn);
-    if (!fav || fav.color === 'rojo') continue;
-    pares.push({ cn: fav.cn, color: fav.color });
-  }
   if (!pares.length) return { creadas, fallos_creacion: fallos, coloreados: 0, movidos: 0, fallos_siembra: [] };
 
   const itemColsR = await p.request().query(
@@ -3100,15 +3018,26 @@ async function reconciliarColoresPublicitarios(grupos) {
       if (listaId) coloreados++;
     } catch (err) {
       await tx.rollback().catch(() => {});
-      log.warn(`No se pudo recolorear CN ${cn} en Publicitarios (revertido, se reintenta en el siguiente sync):`, err.message);
+      log.warn(`No se pudo recolorear CN ${cn} (${etiqueta}, revertido, se reintenta en el siguiente sync):`, err.message);
       fallosSiembra.push(`CN ${cn}: ${err.message}`);
     }
   }
-  if (creadas.length) log.info(`✓ Listas de color de Publicitarios creadas en Farmatic: ${creadas.length}`);
-  if (coloreados > 0) log.info(`✓ CN coloreados (Publicitarios): ${coloreados}`);
-  if (movidos > 0) log.info(`✓ CN movidos de lista de color (Publicitarios): ${movidos}`);
+  if (creadas.length) log.info(`✓ Listas de color creadas en Farmatic: ${creadas.length}`);
+  if (coloreados > 0) log.info(`✓ CN coloreados (${etiqueta}): ${coloreados}`);
+  if (movidos > 0) log.info(`✓ CN movidos de lista de color (${etiqueta}): ${movidos}`);
   return { creadas, fallos_creacion: fallos, coloreados, movidos, fallos_siembra: fallosSiembra };
 }
+// Receta: /api/sync/colores-actuales ya manda {cn, color} por CN (todos los de cada GH, no
+// solo el favorito — ver comentario en el endpoint, nextfarma-api).
+const reconciliarFavoritosColor = (coloresActuales) =>
+  reconciliarCnsPorColor((coloresActuales || []).map(r => ({ cn: Number(r.cn), color: r.color })), 'Receta');
+// Publicitarios: cada CN de cada grupo con su propio color (verde/amarillo/gris/null), 'rojo'
+// excluido (Lista Roja manual, gestionada aparte por procesarListaNegraPendiente).
+const reconciliarColoresPublicitarios = (grupos) =>
+  reconciliarCnsPorColor(
+    (grupos || []).flatMap(g => (g.cns || []).filter(c => c.color !== 'rojo').map(c => ({ cn: c.cn, color: c.color }))),
+    'Publicitarios'
+  );
 
 // sembrarFavoritosPublicitarios (lista FAVORITOS dedicada, LIST_PUB_FAVORITOS) eliminada
 // (02/10/2026, "se meten publicitarios y receta juntos", ver reconciliarColoresPublicitarios):
