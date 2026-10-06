@@ -1433,6 +1433,7 @@ async function sincronizarColoresLigero() {
     if (!cfg?.farmatic_write_enabled) return
     const rec = cfg.farmatic_autocrear_listas ? await api.obtenerColoresActuales() : null
     const pub = cfg.farmatic_autocrear_listas_publicitarios ? await api.obtenerColoresPublicitariosActuales() : null
+    await farmatic.asegurarColoresDeListas()
     const h = _hash([rec, pub])
     if (h === _hashColoresLigero) return
     if (rec) await farmatic.reconciliarFavoritosColor(rec)

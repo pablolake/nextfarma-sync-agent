@@ -3033,6 +3033,15 @@ const reconciliarFavoritosColor = (coloresActuales) =>
   reconciliarCnsPorColor((coloresActuales || []).map(r => ({ cn: Number(r.cn), color: r.color })), 'Receta');
 // Publicitarios: cada CN de cada grupo con su propio color (verde/amarillo/gris/null), 'rojo'
 // excluido (Lista Roja manual, gestionada aparte por procesarListaNegraPendiente).
+// Pone el color de cada una de las 4 listas de color (Receta y Publicitarios comparten las mismas).
+// Idempotente: un UPDATE (o INSERT si no hay fila). Así una lista ya existente o creada a mano
+// también queda con su color, no solo las que el sync crea de cero.
+async function asegurarColoresDeListas() {
+  for (const bucket of Object.keys(COLOR_ENV)) {
+    const id = process.env[COLOR_ENV[bucket]]
+    if (id && XF_REPRESENTA_COLOR[bucket] != null) await aplicarColorALista(Number(id), XF_REPRESENTA_COLOR[bucket])
+  }
+}
 const reconciliarColoresPublicitarios = (grupos) =>
   reconciliarCnsPorColor(
     (grupos || []).flatMap(g => (g.cns || []).filter(c => c.color !== 'rojo').map(c => ({ cn: c.cn, color: c.color }))),
@@ -3843,6 +3852,7 @@ module.exports = {
   reconciliarFavoritosColor,
   completarFavoritosConMasVendido,
   reconciliarColoresPublicitarios,
+  asegurarColoresDeListas,
   asegurarListaRoja,
   homologarNombresListasCategoria,
   homologarNombresListasColor,
