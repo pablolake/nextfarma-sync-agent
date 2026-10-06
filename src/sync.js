@@ -1420,6 +1420,28 @@ async function syncEncargosVencidos(apiClient, log) {
 // arrancar envía siempre una vez.
 let _hashListasReceta = null, _hashListasPub = null, _hashTick = null, _tickActivo = false, _tickCfgAt = 0;
 const _hash = (obj) => require('crypto').createHash('sha1').update(JSON.stringify(obj)).digest('hex');
+// Colores de Receta y Publicitarios en el ciclo ligero (06/10/2026, petición del titular: que se
+// actualicen constantemente con lo que cambia en XestFarma). Cada 5 min pide los colores actuales
+// y solo reescribe las listas de color de Farmatic si el contenido cambió desde el último envío.
+// Las mismas 4 listas de color sirven para Receta y Publicitarios.
+let _hashColoresLigero = null, _coloresLigeroAt = 0
+async function sincronizarColoresLigero() {
+  if (Date.now() - _coloresLigeroAt < 5 * 60 * 1000) return
+  _coloresLigeroAt = Date.now()
+  try {
+    const cfg = await api.obtenerConfigSync()
+    if (!cfg?.farmatic_write_enabled) return
+    const rec = cfg.farmatic_autocrear_listas ? await api.obtenerColoresActuales() : null
+    const pub = cfg.farmatic_autocrear_listas_publicitarios ? await api.obtenerColoresPublicitariosActuales() : null
+    const h = _hash([rec, pub])
+    if (h === _hashColoresLigero) return
+    if (rec) await farmatic.reconciliarFavoritosColor(rec)
+    if (pub) await farmatic.reconciliarColoresPublicitarios(pub)
+    _hashColoresLigero = h
+    log.info('Colores de listas actualizados en Farmatic (ciclo ligero)')
+  } catch (e) { log.warn('Sincronización de colores en ciclo ligero omitida:', e.message) }
+}
+
 async function detectarCambiosListas() {
   try {
     const favoritos = await farmatic.fetchFavoritosListas();
@@ -1475,6 +1497,7 @@ async function runLight() {
   const avisos = [];
   await procesarColasPendientes(api, log, (m) => { avisos.push(m); log.warn('⚠ ' + m); });
   await detectarCambiosListas();
+  await sincronizarColoresLigero();
   return { avisos };
 }
 
