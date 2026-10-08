@@ -494,10 +494,11 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on('update-downloaded', (info) => {
-    try { require('../src/logger').info(`Actualización v${info.version} descargada — se instalará al reiniciar`); } catch {}
+    try { require('../src/logger').info(`Actualización v${info.version} descargada — se instalará sola en el próximo hueco libre`); } catch {}
     pendingUpdate = true;
     send('update-downloaded', { version: info.version });
     refreshTray();
+    programarReinicioAutomatico();
   });
 
   autoUpdater.on('error', (err) => {
@@ -516,6 +517,25 @@ function setupAutoUpdater() {
     if (pendingUpdate) return
     autoUpdater.checkForUpdates().catch(() => {})
   }, 3 * 60 * 60 * 1000);
+}
+
+// Reinicio automático de la actualización (08/10/2026, petición explícita: que no haga falta
+// tocar la bandeja a mano) — en cuanto la descarga termina, se espera al próximo hueco en el que
+// el agente no esté sincronizando (ni ciclo completo ni ligero) y se reinicia solo, en silencio
+// (isSilent=true: no abre el asistente del instalador) y vuelve a abrirse sola después
+// (isForceRunAfter=true). El botón "Instalar actualización" de la bandeja sigue ahí para quien
+// quiera forzarlo antes de que le toque su turno.
+let reinicioAutomaticoProgramado = false;
+function programarReinicioAutomatico() {
+  if (reinicioAutomaticoProgramado) return;
+  reinicioAutomaticoProgramado = true;
+  const intervalo = setInterval(() => {
+    if (isSyncing || isLightRunning) return;
+    clearInterval(intervalo);
+    try { require('../src/logger').info('Hueco libre detectado — reiniciando en silencio para aplicar la actualización.'); } catch {}
+    isQuitting = true;
+    autoUpdater.quitAndInstall(true, true);
+  }, 30 * 1000);
 }
 
 ipcMain.handle('install-update', () => {
