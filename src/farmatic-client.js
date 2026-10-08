@@ -2875,6 +2875,41 @@ async function homologarNombresListas(envMap, prefijoNombre) {
   }
   return { renombradas, fallos };
 }
+// Limpieza de listas de Publicitarios anteriores al 02/10/2026 (reconciliarColoresPublicitarios
+// pasó a compartir las 4 listas de color con Receta ese día, ver comentario ahí) — las "NF Pub -
+// verde/amarillo/gris/favoritos" dejaron de usarse pero nadie las borraba (el sync nunca borra
+// nada por su cuenta — excepción deliberada aquí, con candado propio y un patrón de nombre muy
+// específico: solo listas que empiecen por "NF Pub - " o "NextFarma Pub - ", el prefijo EXCLUSIVO
+// del esquema viejo de Publicitarios. Nunca coincide con una lista de categoría o de color
+// compartida (no llevan "Pub"), ni con la Lista Roja, ni con una lista propia de la farmacia.
+async function limpiarListasPublicitariosLegadas() {
+  const p = await getPool();
+  const tblR = await p.request().query(`SELECT name FROM sys.tables WHERE name = 'ListaArticu'`).catch(() => ({ recordset: [] }));
+  if (!tblR.recordset.length) return { omitida: true, motivo: 'no existe ListaArticu' };
+  const colsR = await p.request().query(`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'ListaArticu'`).catch(() => ({ recordset: [] }));
+  const cols = new Set(colsR.recordset.map(r => String(r.COLUMN_NAME)));
+  const colNombre = await resolverAtributoColumna({
+    entidad: 'LISTA_ARTICU', atributo: 'nombre', candidatos: ['Nombre', 'Descripcion'],
+    columnasReales: cols, descripcion: 'Columna de ListaArticu con el nombre/descripción visible de cada lista de artículos.',
+  });
+  if (!colNombre) return { omitida: true, motivo: 'ListaArticu no tiene columna Nombre/Descripcion reconocible' };
+  const r = await p.request().query(
+    `SELECT IdLista, ${colNombre} AS nombre FROM ListaArticu WHERE ${colNombre} LIKE 'NF Pub - %' OR ${colNombre} LIKE 'NextFarma Pub - %'`
+  ).catch(() => ({ recordset: [] }));
+  const borradas = [];
+  const fallos = [];
+  for (const row of r.recordset) {
+    try {
+      await p.request().input('id', sql.Int, row.IdLista).query(`DELETE FROM ItemListaArticu WHERE XItem_IdLista = @id`);
+      await p.request().input('id', sql.Int, row.IdLista).query(`DELETE FROM ListaArticu WHERE IdLista = @id`);
+      borradas.push({ id: row.IdLista, nombre: row.nombre });
+    } catch (err) {
+      fallos.push(`${row.nombre} (IdLista ${row.IdLista}): ${err.message}`);
+    }
+  }
+  return { borradas, fallos };
+}
+
 const homologarNombresListasCategoria = () => homologarNombresListas(CATEGORIA_ENV, 'XF');
 const homologarNombresListasColor     = () => homologarNombresListas(COLOR_ENV, 'XF');
 
@@ -3039,6 +3074,12 @@ const reconciliarFavoritosColor = (coloresActuales) =>
 async function asegurarColoresDeListas() {
   for (const bucket of Object.keys(COLOR_ENV)) {
     const id = process.env[COLOR_ENV[bucket]]
+    if (id && XF_REPRESENTA_COLOR[bucket] != null) await aplicarColorALista(Number(id), XF_REPRESENTA_COLOR[bucket])
+  }
+  // Lista Roja (06/10/2026, petición explícita): el círculo rojo también se repinta aquí —
+  // antes solo se pintaba al CREAR la lista desde cero, igual que pasaba con las 4 de color.
+  for (const [bucket, envKey] of Object.entries(LISTA_ROJA_ENV)) {
+    const id = process.env[envKey]
     if (id && XF_REPRESENTA_COLOR[bucket] != null) await aplicarColorALista(Number(id), XF_REPRESENTA_COLOR[bucket])
   }
 }
@@ -3856,6 +3897,7 @@ module.exports = {
   asegurarListaRoja,
   homologarNombresListasCategoria,
   homologarNombresListasColor,
+  limpiarListasPublicitariosLegadas,
   discoverSchema,
   discoverDataQuality,
   resetSchemaCache,

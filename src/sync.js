@@ -1443,12 +1443,36 @@ const _hash = (obj) => require('crypto').createHash('sha1').update(JSON.stringif
 // y solo reescribe las listas de color de Farmatic si el contenido cambió desde el último envío.
 // Las mismas 4 listas de color sirven para Receta y Publicitarios.
 let _hashColoresLigero = null, _coloresLigeroAt = 0
-async function sincronizarColoresLigero() {
+async function sincronizarListasLigero() {
   if (Date.now() - _coloresLigeroAt < 5 * 60 * 1000) return
   _coloresLigeroAt = Date.now()
+  let cfg
   try {
-    const cfg = await api.obtenerConfigSync()
+    cfg = await api.obtenerConfigSync()
     if (!cfg?.farmatic_write_enabled) return
+  } catch (e) { log.warn('Sincronización de listas en ciclo ligero omitida:', e.message); return }
+
+  // Renombrado y borrado de listas legadas (06/10/2026, petición explícita: que no haga falta
+  // esperar al ciclo completo): son operaciones baratas (un SELECT y, como mucho, un puñado de
+  // UPDATE/DELETE), idempotentes y con el mismo candado por farmacia que en el ciclo completo.
+  if (cfg.farmatic_homologar_nombres_listas) {
+    try {
+      const [resultadoCat, resultadoCol] = await Promise.all([
+        farmatic.homologarNombresListasCategoria(),
+        farmatic.homologarNombresListasColor(),
+      ])
+      const totalRenombradas = (resultadoCat?.renombradas || 0) + (resultadoCol?.renombradas || 0)
+      if (totalRenombradas > 0) log.info(`Listas renombradas al formato homologado (ciclo ligero): ${totalRenombradas}`)
+    } catch (e) { log.warn('Homologación de nombres en ciclo ligero omitida:', e.message) }
+  }
+  if (cfg.farmatic_borrar_listas_legado) {
+    try {
+      const resultadoLimpieza = await farmatic.limpiarListasPublicitariosLegadas()
+      if (resultadoLimpieza?.borradas?.length) log.info('Listas legadas de Publicitarios borradas (ciclo ligero): ' + resultadoLimpieza.borradas.map(b => b.nombre).join(', '))
+    } catch (e) { log.warn('Limpieza de listas legadas en ciclo ligero omitida:', e.message) }
+  }
+
+  try {
     const rec = cfg.farmatic_autocrear_listas ? await api.obtenerColoresActuales() : null
     const pub = cfg.farmatic_autocrear_listas_publicitarios ? await api.obtenerColoresPublicitariosActuales() : null
     await farmatic.asegurarColoresDeListas()
@@ -1516,7 +1540,7 @@ async function runLight() {
   const avisos = [];
   await procesarColasPendientes(api, log, (m) => { avisos.push(m); log.warn('⚠ ' + m); });
   await detectarCambiosListas();
-  await sincronizarColoresLigero();
+  await sincronizarListasLigero();
   return { avisos };
 }
 
