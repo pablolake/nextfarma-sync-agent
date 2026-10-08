@@ -331,6 +331,7 @@ async function runSync(opts = {}) {
   // compartida con Publicitarios más abajo).
   try {
     const cfgTenant = await api.obtenerConfigSync();
+    farmatic.setPintarColoresListas(cfgTenant.farmatic_pintar_colores_listas);
     if (cfgTenant.farmatic_write_enabled && cfgTenant.farmatic_autocrear_listas) {
       const colores = await api.obtenerColoresActuales();
       const resultadoColor = await farmatic.reconciliarFavoritosColor(colores);
@@ -1449,6 +1450,7 @@ async function sincronizarListasLigero() {
   try {
     cfg = await api.obtenerConfigSync()
     if (!cfg?.farmatic_write_enabled) return
+    farmatic.setPintarColoresListas(cfg.farmatic_pintar_colores_listas)
   } catch (e) { log.warn('Sincronización de listas en ciclo ligero omitida:', e.message); return }
 
   // Colores primero (08/10/2026, petición explícita: "reordenar para hacer esto primero" tras el

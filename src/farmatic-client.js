@@ -1803,6 +1803,14 @@ function setMapeoEsquema(mapeo) {
   mapeoEsquemaActual = mapeo || {};
 }
 
+// Toggle admin independiente (08/10/2026, petición explícita): pintar o no el círculo de color de
+// las listas (RepresentaColor) sin dejar de gestionar qué CN tiene cada una — por defecto activo,
+// para no cambiar el comportamiento de ninguna farmacia que ya lo tenía.
+let pintarColoresListas = true;
+function setPintarColoresListas(activo) {
+  pintarColoresListas = activo !== false;
+}
+
 // Resuelve un atributo "de fontanería" (columna o tabla real) para `entidad.atributo`:
 // 1) valor ya persistido y que sigue existiendo entre las opciones reales de esta sync
 //    → se usa tal cual, sin más. Si dejó de existir (p.ej. Farmatic renombró la tabla de
@@ -2823,7 +2831,7 @@ async function asegurarListas(envMap) {
       // Círculo de color (02/10/2026, documento del titular) — solo los buckets de color
       // (verde/amarillo/gris/negro/rojo) tienen una entrada en XF_REPRESENTA_COLOR; las 7 de
       // categoría no. Best-effort: aplicarColorALista ya loguea y sigue si falla.
-      if (XF_REPRESENTA_COLOR[bucket] != null) await aplicarColorALista(resultado.id, XF_REPRESENTA_COLOR[bucket]);
+      if (pintarColoresListas && XF_REPRESENTA_COLOR[bucket] != null) await aplicarColorALista(resultado.id, XF_REPRESENTA_COLOR[bucket]);
     } else if (!resultado.ok) {
       log.warn(`No se pudo crear la lista de ${bucket}:`, resultado.error);
       fallos.push(`${bucket}: ${resultado.error}`);
@@ -3081,6 +3089,7 @@ const reconciliarFavoritosColor = (coloresActuales) =>
 // Idempotente: un UPDATE (o INSERT si no hay fila). Así una lista ya existente o creada a mano
 // también queda con su color, no solo las que el sync crea de cero.
 async function asegurarColoresDeListas() {
+  if (!pintarColoresListas) return
   for (const bucket of Object.keys(COLOR_ENV)) {
     const id = process.env[COLOR_ENV[bucket]]
     if (id && XF_REPRESENTA_COLOR[bucket] != null) await aplicarColorALista(Number(id), XF_REPRESENTA_COLOR[bucket])
@@ -3896,6 +3905,7 @@ module.exports = {
   detectarListasPorNombre,
   categoriasSinResolver,
   setMapeoEsquema,
+  setPintarColoresListas,
   resolverAtributoColumna,
   resolverAtributoTabla,
   sembrarFavoritosReales,
