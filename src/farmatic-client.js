@@ -2016,11 +2016,20 @@ async function fetchFavoritosListas() {
 // encuentra match y se ignora en silencio, sin conflicto. 'favoritos' (LIST_PUB_FAVORITOS) ya
 // no existe como lista propia — estar en VERDE/AMARILLO/GRIS ya implica ser favorito.
 async function fetchMiembrosListasPublicitarios() {
-  const mapa = { verde: 'LIST_COLOR_VERDE', amarillo: 'LIST_COLOR_AMARILLO', gris: 'LIST_COLOR_GRIS', rojo: 'LIST_NEGRA' };
+  // 08/10/2026 (diagnóstico de listas): faltaba 'negro' — las otras 4 (verde/amarillo/gris/rojo)
+  // ya se leían de vuelta aquí mismo, 'negro' se quedaba sin snapshot de comparación sin motivo.
+  const mapa = { verde: 'LIST_COLOR_VERDE', amarillo: 'LIST_COLOR_AMARILLO', gris: 'LIST_COLOR_GRIS', negro: 'LIST_COLOR_NEGRO', rojo: 'LIST_NEGRA' };
   const idAlista = new Map();
   for (const [lista, envKey] of Object.entries(mapa)) {
     const id = parseInt(process.env[envKey]);
     if (Number.isFinite(id) && id > 0) idAlista.set(id, lista);
+  }
+  // Lista Roja sin configurar (08/10/2026): antes se omitía en silencio, igual que las demás sin
+  // configurar — pero Lista Roja normalmente ya existe en Farmatic desde antes de XestFarma (una
+  // lista propia de la farmacia), así que si falta suele ser que el wizard nunca llegó a apuntar a
+  // ella, no que no exista. Mejor decirlo que quedarse callado.
+  if (!Number.isFinite(parseInt(process.env.LIST_NEGRA))) {
+    log.info('Lista Roja (LIST_NEGRA) no está configurada — no se puede leer su contenido real de Farmatic. Revisar el wizard de Listas.');
   }
   if (!idAlista.size) return { miembros: [], listas_configuradas: [] };
   const p = await getPool();
