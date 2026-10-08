@@ -391,6 +391,24 @@ async function runSync(opts = {}) {
     warn('Homologación de nombres de listas omitida: ' + e.message);
   }
 
+  // Limpieza de listas muertas de Publicitarios (candado propio, ver limpiarListasPublicitariosLegadas).
+  try {
+    const cfgTenant = await api.obtenerConfigSync();
+    if (cfgTenant.farmatic_write_enabled && cfgTenant.farmatic_borrar_listas_legado) {
+      const resultadoLimpieza = await farmatic.limpiarListasPublicitariosLegadas();
+      if (resultadoLimpieza?.omitida) {
+        warn('Limpieza de listas legadas de Publicitarios omitida: ' + resultadoLimpieza.motivo);
+      } else if (resultadoLimpieza.borradas?.length) {
+        ok('Listas legadas de Publicitarios borradas: ' + resultadoLimpieza.borradas.map(b => b.nombre).join(', '));
+      }
+      if (resultadoLimpieza?.fallos?.length) {
+        warn('No se pudieron borrar algunas listas legadas: ' + resultadoLimpieza.fallos.join('; '));
+      }
+    }
+  } catch (e) {
+    warn('Limpieza de listas legadas de Publicitarios omitida: ' + e.message);
+  }
+
   // Publicitarios (30/08/2026; unificado con Receta el 02/10/2026, "se meten publicitarios y
   // receta juntos") — VERDE/AMARILLO/GRIS son ahora las MISMAS 3 listas que ya usa Receta,
   // con TODOS los CN de cada grupo (no solo el favorito — misma decisión que Receta, "mejor
