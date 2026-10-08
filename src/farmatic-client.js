@@ -2858,7 +2858,7 @@ async function homologarNombresListas(envMap, prefijoNombre) {
   for (const [bucket, envKey] of Object.entries(envMap)) {
     const id = parseInt(process.env[envKey], 10);
     if (!id) continue; // no configurada todavía — nada que homologar
-    const nombreCanonico = `${prefijoNombre || 'NF'} - ${bucket}`;
+    const nombreCanonico = resolverNombreLista(prefijoNombre || 'XF', bucket);
     const nombreAjustado = (maxNombre > 0 && nombreCanonico.length > maxNombre)
       ? nombreCanonico.slice(0, maxNombre) : nombreCanonico;
     try {
@@ -2875,8 +2875,8 @@ async function homologarNombresListas(envMap, prefijoNombre) {
   }
   return { renombradas, fallos };
 }
-const homologarNombresListasCategoria = () => homologarNombresListas(CATEGORIA_ENV);
-const homologarNombresListasColor     = () => homologarNombresListas(COLOR_ENV);
+const homologarNombresListasCategoria = () => homologarNombresListas(CATEGORIA_ENV, 'XF');
+const homologarNombresListasColor     = () => homologarNombresListas(COLOR_ENV, 'XF');
 
 // Fase A — al PRINCIPIO del sync (antes de leer/subir ventas de este ciclo): asegura las
 // listas y siembra cada una SOLO con el favorito REAL ya detectado (favoritosReales, de
