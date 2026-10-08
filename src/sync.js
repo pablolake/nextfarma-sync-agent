@@ -363,6 +363,47 @@ async function runSync(opts = {}) {
     warn('Auto-creación de listas de color omitida: ' + e.message);
   }
 
+  // Publicitarios (30/08/2026; unificado con Receta el 02/10/2026, "se meten publicitarios y
+  // receta juntos") — VERDE/AMARILLO/GRIS son ahora las MISMAS 3 listas que ya usa Receta,
+  // con TODOS los CN de cada grupo (no solo el favorito — misma decisión que Receta, "mejor
+  // no, no solo favs, todo los de ese color"; ver reconciliarCnsPorColor). Ya no hay lista
+  // FAVORITOS aparte (estar en una de las 3 de color ya implica ser favorito). Candado propio
+  // (farmatic_autocrear_listas_publicitarios) por si se quiere pilotar Publicitarios sin tocar
+  // Receta en una farmacia dada. ROJO no se toca aquí — es la Lista Roja manual (LIST_NEGRA),
+  // gestionada por su propio pipeline más abajo.
+  try {
+    const cfgTenant = await api.obtenerConfigSync();
+    if (cfgTenant.farmatic_write_enabled && cfgTenant.farmatic_autocrear_listas_publicitarios) {
+      const gruposColor = await api.obtenerColoresPublicitariosActuales();
+      const resultadoColorPub = await farmatic.reconciliarColoresPublicitarios(gruposColor);
+      if (resultadoColorPub?.omitida) {
+        warn('Auto-creación de listas de color de Publicitarios omitida: ' + resultadoColorPub.motivo);
+      } else {
+        if (resultadoColorPub.creadas?.length) {
+          listasPublicitariosCreadas = { ...(listasPublicitariosCreadas || {}), ...Object.fromEntries(resultadoColorPub.creadas.map(c => [c.categoria, c.lista_id])) };
+          await api.reportarListasCreadas({ listas: resultadoColorPub.creadas, favoritos_creados: 0 });
+          ok(`Listas de color de Publicitarios creadas en Farmatic: ${resultadoColorPub.creadas.length}`);
+          await farmatic.fetchListasWizard()
+            .then(listasActualizadas => api.enviarSchemaInfo({ listas: listasActualizadas }))
+            .catch(e => warn('No se pudo actualizar la estructura tras crear listas de color de Publicitarios: ' + e.message));
+        }
+        if (resultadoColorPub.fallos_creacion?.length) {
+          warn(`No se pudieron crear ${resultadoColorPub.fallos_creacion.length} listas de color de Publicitarios: ${resultadoColorPub.fallos_creacion.join('; ')}`);
+        }
+        if (resultadoColorPub.coloreados > 0) {
+          ok(`CN de Publicitarios coloreados en Farmatic: ${resultadoColorPub.coloreados}`);
+        }
+        if (resultadoColorPub.movidos > 0) {
+          ok(`CN de Publicitarios movidos de lista de color: ${resultadoColorPub.movidos}`);
+        }
+        if (resultadoColorPub.fallos_siembra?.length) {
+          warn(`Fallos al colorear ${resultadoColorPub.fallos_siembra.length} CN de Publicitarios: ${resultadoColorPub.fallos_siembra.slice(0, 5).join('; ')}`);
+        }
+      }
+    }
+  } catch (e) {
+    warn('Auto-creación de listas de Publicitarios omitida: ' + e.message);
+  }
   // Homologación de nombres (31/08/2026) — candado PROPIO (farmatic_homologar_nombres_listas),
   // acción explícita por farmacia, nunca automática: renombra "NextFarma - X" → "NF - X" en
   // instalaciones que ya venían usando el auto-creador desde antes del acortado de prefijos
@@ -407,48 +448,6 @@ async function runSync(opts = {}) {
     }
   } catch (e) {
     warn('Limpieza de listas legadas de Publicitarios omitida: ' + e.message);
-  }
-
-  // Publicitarios (30/08/2026; unificado con Receta el 02/10/2026, "se meten publicitarios y
-  // receta juntos") — VERDE/AMARILLO/GRIS son ahora las MISMAS 3 listas que ya usa Receta,
-  // con TODOS los CN de cada grupo (no solo el favorito — misma decisión que Receta, "mejor
-  // no, no solo favs, todo los de ese color"; ver reconciliarCnsPorColor). Ya no hay lista
-  // FAVORITOS aparte (estar en una de las 3 de color ya implica ser favorito). Candado propio
-  // (farmatic_autocrear_listas_publicitarios) por si se quiere pilotar Publicitarios sin tocar
-  // Receta en una farmacia dada. ROJO no se toca aquí — es la Lista Roja manual (LIST_NEGRA),
-  // gestionada por su propio pipeline más abajo.
-  try {
-    const cfgTenant = await api.obtenerConfigSync();
-    if (cfgTenant.farmatic_write_enabled && cfgTenant.farmatic_autocrear_listas_publicitarios) {
-      const gruposColor = await api.obtenerColoresPublicitariosActuales();
-      const resultadoColorPub = await farmatic.reconciliarColoresPublicitarios(gruposColor);
-      if (resultadoColorPub?.omitida) {
-        warn('Auto-creación de listas de color de Publicitarios omitida: ' + resultadoColorPub.motivo);
-      } else {
-        if (resultadoColorPub.creadas?.length) {
-          listasPublicitariosCreadas = { ...(listasPublicitariosCreadas || {}), ...Object.fromEntries(resultadoColorPub.creadas.map(c => [c.categoria, c.lista_id])) };
-          await api.reportarListasCreadas({ listas: resultadoColorPub.creadas, favoritos_creados: 0 });
-          ok(`Listas de color de Publicitarios creadas en Farmatic: ${resultadoColorPub.creadas.length}`);
-          await farmatic.fetchListasWizard()
-            .then(listasActualizadas => api.enviarSchemaInfo({ listas: listasActualizadas }))
-            .catch(e => warn('No se pudo actualizar la estructura tras crear listas de color de Publicitarios: ' + e.message));
-        }
-        if (resultadoColorPub.fallos_creacion?.length) {
-          warn(`No se pudieron crear ${resultadoColorPub.fallos_creacion.length} listas de color de Publicitarios: ${resultadoColorPub.fallos_creacion.join('; ')}`);
-        }
-        if (resultadoColorPub.coloreados > 0) {
-          ok(`CN de Publicitarios coloreados en Farmatic: ${resultadoColorPub.coloreados}`);
-        }
-        if (resultadoColorPub.movidos > 0) {
-          ok(`CN de Publicitarios movidos de lista de color: ${resultadoColorPub.movidos}`);
-        }
-        if (resultadoColorPub.fallos_siembra?.length) {
-          warn(`Fallos al colorear ${resultadoColorPub.fallos_siembra.length} CN de Publicitarios: ${resultadoColorPub.fallos_siembra.slice(0, 5).join('; ')}`);
-        }
-      }
-    }
-  } catch (e) {
-    warn('Auto-creación de listas de Publicitarios omitida: ' + e.message);
   }
 
   const anioActual   = new Date().getFullYear();
@@ -1452,9 +1451,26 @@ async function sincronizarListasLigero() {
     if (!cfg?.farmatic_write_enabled) return
   } catch (e) { log.warn('Sincronización de listas en ciclo ligero omitida:', e.message); return }
 
-  // Renombrado y borrado de listas legadas (06/10/2026, petición explícita: que no haga falta
-  // esperar al ciclo completo): son operaciones baratas (un SELECT y, como mucho, un puñado de
-  // UPDATE/DELETE), idempotentes y con el mismo candado por farmacia que en el ciclo completo.
+  // Colores primero (08/10/2026, petición explícita: "reordenar para hacer esto primero" tras el
+  // bug real de CN huérfanos acumulados en verde/gris/amarillo en farmacia jose) — es lo que
+  // corrige datos incorrectos que se ven en Farmatic; homologar nombres y borrar listas muertas
+  // son solo cosméticos, así que pasan a correr después, nunca antes.
+  try {
+    const rec = cfg.farmatic_autocrear_listas ? await api.obtenerColoresActuales() : null
+    const pub = cfg.farmatic_autocrear_listas_publicitarios ? await api.obtenerColoresPublicitariosActuales() : null
+    await farmatic.asegurarColoresDeListas()
+    const h = _hash([rec, pub])
+    if (h !== _hashColoresLigero) {
+      if (rec) await farmatic.reconciliarFavoritosColor(rec)
+      if (pub) await farmatic.reconciliarColoresPublicitarios(pub)
+      _hashColoresLigero = h
+      log.info('Colores de listas actualizados en Farmatic (ciclo ligero)')
+    }
+  } catch (e) { log.warn('Sincronización de colores en ciclo ligero omitida:', e.message) }
+
+  // Renombrado y borrado de listas legadas: operaciones baratas (un SELECT y, como mucho, un
+  // puñado de UPDATE/DELETE), idempotentes y con el mismo candado por farmacia que en el ciclo
+  // completo — pero cosméticas, así que van después de los colores, no antes.
   if (cfg.farmatic_homologar_nombres_listas) {
     try {
       const [resultadoCat, resultadoCol] = await Promise.all([
@@ -1471,18 +1487,6 @@ async function sincronizarListasLigero() {
       if (resultadoLimpieza?.borradas?.length) log.info('Listas legadas de Publicitarios borradas (ciclo ligero): ' + resultadoLimpieza.borradas.map(b => b.nombre).join(', '))
     } catch (e) { log.warn('Limpieza de listas legadas en ciclo ligero omitida:', e.message) }
   }
-
-  try {
-    const rec = cfg.farmatic_autocrear_listas ? await api.obtenerColoresActuales() : null
-    const pub = cfg.farmatic_autocrear_listas_publicitarios ? await api.obtenerColoresPublicitariosActuales() : null
-    await farmatic.asegurarColoresDeListas()
-    const h = _hash([rec, pub])
-    if (h === _hashColoresLigero) return
-    if (rec) await farmatic.reconciliarFavoritosColor(rec)
-    if (pub) await farmatic.reconciliarColoresPublicitarios(pub)
-    _hashColoresLigero = h
-    log.info('Colores de listas actualizados en Farmatic (ciclo ligero)')
-  } catch (e) { log.warn('Sincronización de colores en ciclo ligero omitida:', e.message) }
 }
 
 async function detectarCambiosListas() {
