@@ -3173,12 +3173,19 @@ async function completarFavoritosConMasVendido(categoriasActuales) {
   const categoriaPorCh = new Map((categoriasActuales || []).map(r => [Number(r.ch), r.categoria]));
   const listaIdPorCategoria = new Map(Object.entries(lcat).map(([id, categoria]) => [categoria, parseInt(id, 10)]));
 
-  let completados = 0;
+  // Diagnóstico (09/10/2026, caso jose: las 7 listas de categoría llevan desde su creación
+  // con NumElem NULL, nunca se ha sembrado ni un favorito): completados=0 era indistinguible
+  // de "no había nada que hacer" — sin saber si topR venía vacío (sin ventas/grupos que
+  // casen), si todo caía en ya_cubiertos/sin_lista, o si el INSERT fallaba fila a fila (antes
+  // solo log.warn local, invisible server-side). Se cuenta cada motivo para que
+  // last_sync_warnings_detalle diga la causa real en vez de un silencio idéntico al éxito.
+  let completados = 0, sinLista = 0, yaCubiertosSkip = 0;
+  const fallos = [];
   for (const row of topR.recordset) {
     const ch = Number(row.ch);
-    if (yaCubiertos.has(ch)) continue;
+    if (yaCubiertos.has(ch)) { yaCubiertosSkip++; continue; }
     const listaId = listaIdPorCategoria.get(categoriaPorCh.get(ch));
-    if (!listaId) continue;
+    if (!listaId) { sinLista++; continue; }
     try {
       await p.request()
         .input('lista', sql.Int, listaId)
@@ -3190,10 +3197,14 @@ async function completarFavoritosConMasVendido(categoriasActuales) {
       completados++;
     } catch (err) {
       log.warn(`No se pudo completar favorito de CH ${ch}:`, err.message);
+      if (fallos.length < 5) fallos.push(`CH ${ch}: ${err.message}`);
     }
   }
   if (completados > 0) log.info(`✓ Favoritos completados con más vendido: ${completados}`);
-  return { favoritos_completados: completados };
+  return {
+    favoritos_completados: completados, candidatos_totales: topR.recordset.length,
+    ya_cubiertos: yaCubiertosSkip, sin_lista: sinLista, fallos,
+  };
 }
 
 // Marca el tick "Preferido en búsquedas y sustituciones" (Articu.MarcaEx bit 0x4000) del nuevo

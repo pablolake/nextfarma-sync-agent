@@ -315,6 +315,14 @@ async function runSync(opts = {}) {
           ok(`Favoritos reales sembrados en Farmatic: ${resultado.favoritos_creados} de ${resultado.favoritos_totales}`);
         } else if (resultado.favoritos_totales > 0) {
           warn(`Favoritos reales detectados (${resultado.favoritos_totales}) pero ninguno se sembró en Farmatic`);
+        } else {
+          // 0 favoritos detectados: con las 7 listas de categoría ya configuradas, la
+          // detección (fetchFavoritosActuales) lee de ESAS MISMAS listas — si se crearon
+          // vacías (nunca tuvieron contenido previo en Farmatic), nunca habrá nada que
+          // detectar aquí; solo Fase B (completarFavoritosConMasVendido, al final del sync)
+          // puede arrancarlas desde cero. Antes esto era un silencio idéntico al de "todo
+          // bien, nada nuevo que sembrar" — ahora se distingue para no seguir a ciegas.
+          warn('0 favoritos reales detectados en las listas de categoría (si se crearon vacías, es esperable — depende de Fase B para arrancar)');
         }
         if (resultado.favoritos_sin_lista > 0) {
           warn(`${resultado.favoritos_sin_lista} favoritos reales sin lista de categoría disponible donde guardarse`);
@@ -1112,6 +1120,10 @@ async function runSync(opts = {}) {
         const resultado = await farmatic.completarFavoritosConMasVendido(categorias);
         if (resultado?.favoritos_completados > 0) {
           ok(`Favoritos completados con más vendido: ${resultado.favoritos_completados}`);
+        } else if (resultado && resultado.candidatos_totales === 0) {
+          warn('Completar favoritos con más vendido: 0 candidatos encontrados (sin ventas de genéricos de los últimos 12 meses con grupo homogéneo oficial)');
+        } else if (resultado && resultado.candidatos_totales > 0) {
+          warn(`Completar favoritos con más vendido: 0 completados de ${resultado.candidatos_totales} candidatos (${resultado.ya_cubiertos} ya cubiertos, ${resultado.sin_lista} sin lista de categoría, ${resultado.fallos.length} fallos: ${resultado.fallos.join('; ')})`)
         }
       }
     }
