@@ -285,11 +285,14 @@ async function runSync(opts = {}) {
   // motivo de omisión, o fallos parciales — llegue a last_sync_warnings_detalle y sea
   // visible desde el panel de admin sin depender del log local del agente (antes de esto,
   // un fallo aquí era invisible fuera de la máquina del cliente — ver caso Jose-2).
+  // 09/10/2026: ya no se "detecta" el favorito leyendo Farmatic (circular si las listas se
+  // crean vacías, ver reconciliarFavoritosCategoria) — se reconcilia directamente el
+  // favorito_cn que manda el servidor (grupos_homogeneos), petición explícita del titular.
   try {
     const cfgTenant = await api.obtenerConfigSync();
     if (cfgTenant.farmatic_write_enabled && cfgTenant.farmatic_autocrear_listas) {
       const categorias = await api.obtenerCategoriasActuales();
-      const resultado = await farmatic.sembrarFavoritosReales(categorias, favActuales);
+      const resultado = await farmatic.reconciliarFavoritosCategoria(categorias);
       if (resultado?.omitida) {
         warn('Auto-creación de listas (fase A) omitida: ' + resultado.motivo);
       } else {
@@ -298,7 +301,7 @@ async function runSync(opts = {}) {
           // El backend espera { listas, favoritos_creados } — antes se mandaba el objeto
           // tal cual y el backend siempre respondía 400 "listas[] requerido": la alerta al
           // titular nunca se llegó a crear. Detectado en la primera prueba real contra Docker.
-          await api.reportarListasCreadas({ listas: resultado.creadas, favoritos_creados: resultado.favoritos_creados });
+          await api.reportarListasCreadas({ listas: resultado.creadas, favoritos_creados: resultado.sembrados });
           ok(`Listas de favoritos creadas en Farmatic: ${resultado.creadas.length}`);
           // El barrido de esquema (PASO 1b, más arriba) ya mandó `listas` ANTES de que estas
           // se crearan — sin este reenvío, el panel de admin no las vería hasta el siguiente
@@ -311,24 +314,13 @@ async function runSync(opts = {}) {
         if (resultado.fallos_creacion?.length) {
           warn(`No se pudieron crear ${resultado.fallos_creacion.length} listas de categoría: ${resultado.fallos_creacion.join('; ')}`);
         }
-        if (resultado.favoritos_creados > 0) {
-          ok(`Favoritos reales sembrados en Farmatic: ${resultado.favoritos_creados} de ${resultado.favoritos_totales}`);
-        } else if (resultado.favoritos_totales > 0) {
-          warn(`Favoritos reales detectados (${resultado.favoritos_totales}) pero ninguno se sembró en Farmatic`);
+        if (resultado.sembrados > 0) {
+          ok(`Favoritos de categoría reconciliados en Farmatic: ${resultado.sembrados}${resultado.movidos ? ` (${resultado.movidos} movidos de lista)` : ''}`);
         } else {
-          // 0 favoritos detectados: con las 7 listas de categoría ya configuradas, la
-          // detección (fetchFavoritosActuales) lee de ESAS MISMAS listas — si se crearon
-          // vacías (nunca tuvieron contenido previo en Farmatic), nunca habrá nada que
-          // detectar aquí; solo Fase B (completarFavoritosConMasVendido, al final del sync)
-          // puede arrancarlas desde cero. Antes esto era un silencio idéntico al de "todo
-          // bien, nada nuevo que sembrar" — ahora se distingue para no seguir a ciegas.
-          warn('0 favoritos reales detectados en las listas de categoría (si se crearon vacías, es esperable — depende de Fase B para arrancar)');
-        }
-        if (resultado.favoritos_sin_lista > 0) {
-          warn(`${resultado.favoritos_sin_lista} favoritos reales sin lista de categoría disponible donde guardarse`);
+          warn('0 favoritos con categoría para reconciliar en Farmatic (grupos_homogeneos.favorito_cn vacío para todos los ch con categoría)');
         }
         if (resultado.fallos_siembra?.length) {
-          warn(`Fallos al sembrar ${resultado.fallos_siembra.length} favoritos reales: ${resultado.fallos_siembra.slice(0, 5).join('; ')}${resultado.fallos_siembra.length > 5 ? '…' : ''}`);
+          warn(`Fallos al reconciliar ${resultado.fallos_siembra.length} favoritos de categoría: ${resultado.fallos_siembra.slice(0, 5).join('; ')}${resultado.fallos_siembra.length > 5 ? '…' : ''}`);
         }
       }
     }

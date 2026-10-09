@@ -2328,8 +2328,8 @@ async function fetchFavoritosActuales() {
   // Si el CN no tiene CODConjunto (no todo producto pertenece a un grupo homogéneo oficial
   // — típico en jose/jose-2, con ~70-90% del catálogo sin CODConjunto), se sintetiza un
   // "ch" negativo único a partir del propio CN — nunca colisiona con un ch real (siempre
-  // positivo) y permite que sembrarFavoritosReales() lo detecte como "sin categoría
-  // calculable" y lo meta en RESTO en vez de perder el favorito real del titular.
+  // positivo) para que favoritos-historico no pierda el favorito real del titular aunque
+  // su CN no pertenezca a ningún grupo homogéneo oficial.
   if (tablaGenerica) {
     try {
       const r = await p.request().query(`
@@ -2525,8 +2525,8 @@ function getCategoriaLista() {
 // inexistente, columna no reconocida, IdLista sin autonumérico) no dejaba ningún rastro
 // consultable desde el panel de admin (caso real: no se pudo confirmar si Jose-2 había
 // creado sus listas o no sin pedirle capturas de pantalla al cliente). Ahora se devuelve
-// el motivo explícito para que sembrarFavoritosReales() lo propague y sync.js lo reporte
-// con warn() — mismo mecanismo que ya usan los avisos de ventas (last_sync_warnings_detalle).
+// el motivo explícito para que reconciliarFavoritosCategoria() lo propague y sync.js lo
+// reporte con warn() — mismo mecanismo que ya usan los avisos de ventas (last_sync_warnings_detalle).
 // Valor SQL seguro para rellenar una columna NOT NULL sin default, según su tipo — evita
 // tener que adivinar de antemano el nombre de cada columna "rara" que pueda tener una
 // instalación real de Farmatic (ver columnasObligatorias más abajo). Devuelve null para
@@ -2930,71 +2930,81 @@ async function limpiarListasPublicitariosLegadas() {
 const homologarNombresListasCategoria = () => homologarNombresListas(CATEGORIA_ENV, 'XF');
 const homologarNombresListasColor     = () => homologarNombresListas(COLOR_ENV, 'XF');
 
-// Fase A — al PRINCIPIO del sync (antes de leer/subir ventas de este ciclo): asegura las
-// listas y siembra cada una SOLO con el favorito REAL ya detectado (favoritosReales, de
-// fetchFavoritosActuales) — es la elección de verdad del titular, nunca "más vendido"
-// aquí. Los grupos sin favorito real se dejan para la fase B, al final del sync.
-// Genérico: crea (si faltan) las listas de `asegurarFn` y siembra cada una SOLO con el
-// favorito REAL ya detectado — nunca "más vendido" aquí (eso es fase B, y solo aplica a
-// categoría, ver completarFavoritosConMasVendido). `bucketPorCh` es el bucket calculado por
-// el SaaS para cada ch (categoría o color); `bucketFallback` es donde cae un favorito real
-// cuyo ch no tiene bucket calculable (ver comentario de más abajo) — 'RESTO' para categoría,
-// 'gris' para color.
-async function sembrarFavoritosEnListas(asegurarFn, bucketPorChMap, favoritosReales, bucketFallback, etiqueta) {
-  const aseguradas = await asegurarFn();
+// Reconcilia el favorito_cn que YA calcula XestFarma (grupos_homogeneos, mandado por
+// /api/sync/categorias-actuales) contra las 7 listas de categoría — mismo patrón de
+// reconciliación completa que reconciliarCnsPorColor para VERDE/AMARILLO/GRIS/NEGRO (mueve de
+// lista si la categoría cambió, nunca dos veces), en vez de depender de "cambios pendientes"
+// (procesarCambiosPendientes es un DELTA: solo aplica cambios desde que se activa, nunca hace
+// un backfill de lo que ya existía) ni de sembrarFavoritosReales/fetchFavoritosActuales
+// (detectaba el favorito LEYENDO esas mismas listas — circular: si se crean vacías nunca hay
+// nada que detectar ahí, confirmado en jose: NumElem NULL en las 7 desde su creación).
+// 09/10/2026, petición explícita del titular: "los favs de xestfarma son los que tiene que
+// poner en las listas de categorías" — ya no se detecta nada, se escribe directamente.
+async function reconciliarFavoritosCategoria(categoriasActuales) {
+  const aseguradas = await asegurarListasCategoria();
   if (aseguradas.omitida) return aseguradas;
   const { creadas, fallos, listaIdPorBucket } = aseguradas;
   const p = await getPool();
+  const todasLasListas = [...listaIdPorBucket.values()];
 
-  const favoritosPorCh = favoritosReales instanceof Map ? favoritosReales : new Map();
+  const pares = (categoriasActuales || [])
+    .filter(r => r.favorito_cn != null)
+    .map(r => ({ cn: Number(r.favorito_cn), categoria: r.categoria }));
 
-  // Igual que en ListaArticu: se detectan por metadata las columnas de ItemListaArticu que
-  // haya además de XItem_IdLista/XItem_IdArticu y sean NOT NULL sin default, en vez de asumir
-  // que esas dos son las únicas en cualquier instalación real.
-  const itemColsR = favoritosPorCh.size
-    ? await p.request().query(
-        `SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'ItemListaArticu'`
-      ).catch(() => ({ recordset: [] }))
-    : { recordset: [] };
+  if (!pares.length) return { creadas, fallos_creacion: fallos, sembrados: 0, movidos: 0, fallos_siembra: [] };
+
+  const itemColsR = await p.request().query(
+    `SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'ItemListaArticu'`
+  ).catch(() => ({ recordset: [] }));
   const itemColsInfo = itemColsR.recordset;
   const itemObligatorias = columnasObligatorias(itemColsInfo, new Set(['XItem_IdLista', 'XItem_IdArticu']));
   const itemColumnasBase = ['XItem_IdLista', 'XItem_IdArticu', ...itemObligatorias.map(c => c.nombre)];
   const itemValoresBase  = ['@lista', '@cn', ...itemObligatorias.map(c => c.valor)];
 
-  let favoritosCreados = 0;
-  let favoritosSinLista = 0;
+  let sembrados = 0, movidos = 0;
   const fallosSiembra = [];
-  for (const [ch, cn] of favoritosPorCh) {
-    // Si el ch no tiene bucket calculado (grupo homogéneo oficial no reconocido por el SaaS,
-    // o "ch" sintético de un favorito real sin CODConjunto — ver fetchFavoritosActuales) no
-    // se descarta el favorito: Farmatic ya lo reconoce con su propia agrupación interna al
-    // dispensar, así que cae al bucket por defecto en vez de perderse.
-    const bucket = bucketPorChMap.get(ch) || bucketFallback;
-    const listaId = listaIdPorBucket.get(bucket);
-    if (!listaId) { favoritosSinLista++; continue; }
-    const resultado = await insertarConReintentoPorColumna(
-      p, 'ItemListaArticu', itemColsInfo, itemColumnasBase, itemValoresBase,
-      [{ nombre: 'lista', tipo: sql.Int, valor: listaId }, { nombre: 'cn', tipo: sql.Int, valor: cn }],
-      { guardSql: 'IF NOT EXISTS (SELECT 1 FROM ItemListaArticu WHERE XItem_IdLista = @lista AND XItem_IdArticu = @cn) ' }
-    );
-    if (resultado.ok) {
-      favoritosCreados++;
-    } else {
-      log.warn(`No se pudo sembrar favorito real de CH ${ch} (${etiqueta}):`, resultado.error);
-      fallosSiembra.push(`CH ${ch}: ${resultado.error}`);
+  for (const { cn, categoria } of pares) {
+    const listaId = listaIdPorBucket.get(categoria) || listaIdPorBucket.get('RESTO');
+    if (!listaId) continue;
+    const listasAQuitar = todasLasListas.filter(id => id !== listaId);
+
+    // Misma transacción borrado+inserción que reconciliarCnsPorColor (ver ahí el motivo):
+    // un fallo a medias no debe dejar el CN fuera de todas las listas ni duplicado en dos.
+    const tx = new sql.Transaction(p);
+    await tx.begin();
+    try {
+      let movidosCn = 0;
+      if (listasAQuitar.length) {
+        const actualR = await tx.request()
+          .input('cn', sql.Int, cn)
+          .query(`SELECT XItem_IdLista FROM ItemListaArticu WHERE XItem_IdArticu = @cn AND XItem_IdLista IN (${listasAQuitar.join(',')})`);
+        for (const row of actualR.recordset) {
+          await tx.request()
+            .input('lista', sql.Int, row.XItem_IdLista)
+            .input('cn', sql.Int, cn)
+            .query(`DELETE FROM ItemListaArticu WHERE XItem_IdLista = @lista AND XItem_IdArticu = @cn`);
+          movidosCn++;
+        }
+      }
+      const resultado = await insertarConReintentoPorColumna(
+        tx, 'ItemListaArticu', itemColsInfo, itemColumnasBase, itemValoresBase,
+        [{ nombre: 'lista', tipo: sql.Int, valor: listaId }, { nombre: 'cn', tipo: sql.Int, valor: cn }],
+        { guardSql: 'IF NOT EXISTS (SELECT 1 FROM ItemListaArticu WHERE XItem_IdLista = @lista AND XItem_IdArticu = @cn) ' }
+      );
+      if (!resultado.ok) throw new Error(resultado.error);
+      await tx.commit();
+      movidos += movidosCn;
+      sembrados++;
+    } catch (err) {
+      await tx.rollback().catch(() => {});
+      log.warn(`No se pudo sembrar favorito CN ${cn} en categoría ${categoria} (revertido, se reintenta en el siguiente sync):`, err.message);
+      fallosSiembra.push(`CN ${cn} (${categoria}): ${err.message}`);
     }
   }
-  if (creadas.length) log.info(`✓ Listas de ${etiqueta} creadas en Farmatic: ${creadas.length}`);
-  if (favoritosCreados > 0) log.info(`✓ Favoritos reales sembrados (${etiqueta}): ${favoritosCreados}`);
-  return {
-    creadas, fallos_creacion: fallos, favoritos_creados: favoritosCreados,
-    favoritos_totales: favoritosPorCh.size, favoritos_sin_lista: favoritosSinLista,
-    fallos_siembra: fallosSiembra,
-  };
-}
-function sembrarFavoritosReales(categoriasActuales, favoritosReales) {
-  const categoriaPorCh = new Map((categoriasActuales || []).map(r => [Number(r.ch), r.categoria]));
-  return sembrarFavoritosEnListas(asegurarListasCategoria, categoriaPorCh, favoritosReales, 'RESTO', 'categoría');
+  if (creadas.length) log.info(`✓ Listas de categoría creadas en Farmatic: ${creadas.length}`);
+  if (sembrados > 0) log.info(`✓ Favoritos de categoría sembrados/confirmados: ${sembrados}`);
+  if (movidos > 0) log.info(`✓ CN movidos de lista de categoría: ${movidos}`);
+  return { creadas, fallos_creacion: fallos, sembrados, movidos, fallos_siembra: fallosSiembra };
 }
 
 // Reconcilia TODOS los CN de un color (verde/amarillo/gris) contra las listas XF compartidas
@@ -3919,7 +3929,7 @@ module.exports = {
   setPintarColoresListas,
   resolverAtributoColumna,
   resolverAtributoTabla,
-  sembrarFavoritosReales,
+  reconciliarFavoritosCategoria,
   reconciliarFavoritosColor,
   completarFavoritosConMasVendido,
   reconciliarColoresPublicitarios,
