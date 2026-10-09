@@ -200,8 +200,10 @@ async function runSync(opts = {}) {
     // Listas de artículos reales (id + nombre + nº de ítems) — permite ver desde Railway
     // qué listas usa esta farmacia y con cuántos artículos, sin depender de que el wizard
     // de Listas se haya rellenado ni de preguntarle a la farmacia cómo organiza sus favoritos.
+    let listasFarmaticError = null;
     const listasFarmatic = await farmatic.fetchListasWizard().catch(e => {
       log.warn('fetchListasWizard (diagnóstico) omitido:', e.message);
+      listasFarmaticError = e.message;
       return null;
     });
     // Autodetección por nombre de las 7 categorías DESACTIVADA (decisión del titular,
@@ -234,6 +236,7 @@ async function runSync(opts = {}) {
       ...(calidad ? { calidad } : {}),
       ...(rgpd ? { rgpd } : {}),
       ...(listasFarmatic ? { listas: listasFarmatic } : {}),
+      listas_error: listasFarmaticError,
       ...(listaCofaresDirecto ? { lista_cofares_directo: listaCofaresDirecto } : {}),
     });
   } catch (e) {
