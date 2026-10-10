@@ -2930,6 +2930,75 @@ async function limpiarListasPublicitariosLegadas() {
 const homologarNombresListasCategoria = () => homologarNombresListas(CATEGORIA_ENV, 'XF');
 const homologarNombresListasColor     = () => homologarNombresListas(COLOR_ENV, 'XF');
 
+// Limpieza de listas XF duplicadas (09/10/2026, caso real jose: "se le han duplicado las
+// listas") — causa encontrada: un "Guardar configuración" del Asistente con el paso de Listas
+// vacío (desplegables sin cargar) sobreescribía cfg.wizard entero, perdiendo los IdLista ya
+// configurados; el siguiente ciclo, al no reconocer ninguno, volvía a crear las 12 de cero con
+// IDs nuevos (138-144 → 161-167, p.ej.) — ya arreglado en el Electron (wizard-save deja de
+// borrar estos campos con un valor vacío), pero esto limpia lo que ya quedó duplicado.
+// Agrupa por NOMBRE exacto ("XF STAR", "XF VERDE"...): si hay más de un IdLista con el mismo
+// nombre, se queda el que esté configurado ahora mismo (o si ninguno lo está, el que tenga más
+// artículos) y se borran los demás — pero SOLO si están vacíos. Una duplicada con contenido
+// real nunca se borra sola (podría ser una lista propia de la farmacia que coincide de nombre
+// por casualidad, o un fallo a medias dejando CN huérfanos ahí) — se deja y se reporta para que
+// alguien la mire a mano.
+async function limpiarListasXFDuplicadas() {
+  const p = await getPool();
+  const tblR = await p.request().query(`SELECT name FROM sys.tables WHERE name = 'ListaArticu'`).catch(() => ({ recordset: [] }));
+  if (!tblR.recordset.length) return { omitida: true, motivo: 'no existe ListaArticu' };
+  const colsR = await p.request().query(`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'ListaArticu'`).catch(() => ({ recordset: [] }));
+  const cols = new Set(colsR.recordset.map(r => String(r.COLUMN_NAME)));
+  const colNombre = await resolverAtributoColumna({
+    entidad: 'LISTA_ARTICU', atributo: 'nombre', candidatos: ['Nombre', 'Descripcion'],
+    columnasReales: cols, descripcion: 'Columna de ListaArticu con el nombre/descripción visible de cada lista de artículos.',
+  });
+  if (!colNombre) return { omitida: true, motivo: 'ListaArticu no tiene columna Nombre/Descripcion reconocible' };
+
+  const r = await p.request().query(`
+    SELECT l.IdLista AS id, LTRIM(RTRIM(l.${colNombre})) AS nombre, COUNT(i.XItem_IdArticu) AS n_items
+      FROM ListaArticu l
+      LEFT JOIN ItemListaArticu i ON i.XItem_IdLista = l.IdLista
+     WHERE l.${colNombre} LIKE 'XF %'
+     GROUP BY l.IdLista, l.${colNombre}
+  `).catch(() => ({ recordset: [] }));
+  if (!r.recordset.length) return { borradas: [], conservadas_con_contenido: [] };
+
+  const TODOS_LOS_ENV = { ...CATEGORIA_ENV, ...COLOR_ENV, ...LISTA_ROJA_ENV };
+  const idsConfigurados = new Set(
+    Object.values(TODOS_LOS_ENV).map(envKey => parseInt(process.env[envKey], 10)).filter(Number.isFinite)
+  );
+
+  const porNombre = new Map();
+  for (const row of r.recordset) {
+    const nombre = row.nombre;
+    if (!porNombre.has(nombre)) porNombre.set(nombre, []);
+    porNombre.get(nombre).push({ id: row.id, n_items: Number(row.n_items) });
+  }
+
+  const borradas = [];
+  const conservadasConContenido = [];
+  for (const [nombre, filas] of porNombre) {
+    if (filas.length < 2) continue;
+    const configurada = filas.find(f => idsConfigurados.has(f.id));
+    const aConservar = configurada || [...filas].sort((a, b) => b.n_items - a.n_items)[0];
+    for (const fila of filas) {
+      if (fila.id === aConservar.id) continue;
+      if (fila.n_items > 0) {
+        conservadasConContenido.push(`${nombre} (IdLista ${fila.id}, ${fila.n_items} artículos) — duplicada de ${aConservar.id} pero con contenido, no se borra sola`);
+        continue;
+      }
+      try {
+        await p.request().input('id', sql.Int, fila.id).query(`DELETE FROM ItemListaArticu WHERE XItem_IdLista = @id`);
+        await p.request().input('id', sql.Int, fila.id).query(`DELETE FROM ListaArticu WHERE IdLista = @id`);
+        borradas.push({ id: fila.id, nombre, conservada: aConservar.id });
+      } catch (err) {
+        conservadasConContenido.push(`${nombre} (IdLista ${fila.id}): no se pudo borrar — ${err.message}`);
+      }
+    }
+  }
+  return { borradas, conservadas_con_contenido: conservadasConContenido };
+}
+
 // Reconcilia el favorito_cn que YA calcula XestFarma (grupos_homogeneos, mandado por
 // /api/sync/categorias-actuales) contra las 7 listas de categoría — mismo patrón de
 // reconciliación completa que reconciliarCnsPorColor para VERDE/AMARILLO/GRIS/NEGRO (mueve de
@@ -3938,6 +4007,7 @@ module.exports = {
   homologarNombresListasCategoria,
   homologarNombresListasColor,
   limpiarListasPublicitariosLegadas,
+  limpiarListasXFDuplicadas,
   discoverSchema,
   discoverDataQuality,
   resetSchemaCache,

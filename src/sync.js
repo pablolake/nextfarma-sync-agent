@@ -449,6 +449,15 @@ async function runSync(opts = {}) {
       if (resultadoLimpieza?.fallos?.length) {
         warn('No se pudieron borrar algunas listas legadas: ' + resultadoLimpieza.fallos.join('; '));
       }
+      const resultadoDup = await farmatic.limpiarListasXFDuplicadas()
+      if (resultadoDup?.omitida) {
+        warn('Limpieza de listas XF duplicadas omitida: ' + resultadoDup.motivo)
+      } else if (resultadoDup.borradas?.length) {
+        ok('Listas XF duplicadas borradas (vacías): ' + resultadoDup.borradas.map(b => `${b.nombre} (${b.id})`).join(', '))
+      }
+      if (resultadoDup?.conservadas_con_contenido?.length) {
+        warn('Listas XF duplicadas CON contenido, revisar a mano: ' + resultadoDup.conservadas_con_contenido.join('; '))
+      }
     }
   } catch (e) {
     warn('Limpieza de listas legadas de Publicitarios omitida: ' + e.message);
@@ -1495,6 +1504,10 @@ async function sincronizarListasLigero() {
       const resultadoLimpieza = await farmatic.limpiarListasPublicitariosLegadas()
       if (resultadoLimpieza?.borradas?.length) log.info('Listas legadas de Publicitarios borradas (ciclo ligero): ' + resultadoLimpieza.borradas.map(b => b.nombre).join(', '))
     } catch (e) { log.warn('Limpieza de listas legadas en ciclo ligero omitida:', e.message) }
+    try {
+      const resultadoDup = await farmatic.limpiarListasXFDuplicadas()
+      if (resultadoDup?.borradas?.length) log.info('Listas XF duplicadas borradas (ciclo ligero): ' + resultadoDup.borradas.map(b => `${b.nombre} (${b.id})`).join(', '))
+    } catch (e) { log.warn('Limpieza de listas XF duplicadas en ciclo ligero omitida:', e.message) }
   }
 }
 

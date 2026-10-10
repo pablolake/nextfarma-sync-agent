@@ -473,8 +473,29 @@ ipcMain.handle('wizard-suggest-lists', async (_, listas, categorias) => {
   }
 });
 
+// Campos de lista que el sync también autogestiona (ver runSyncOnce más arriba: tras crear
+// listas, las persiste en cfg.wizard sin que el titular pase por este wizard). Bug real
+// confirmado 09/10/2026 en jose: un "Guardar configuración" del Asistente con el paso de
+// Listas sin cargar bien (desplegables vacíos, p. ej. por un fallo pasajero leyendo Farmatic)
+// mandaba wizardCfg con estos 8 campos a null — como esto sobreescribía cfg.wizard ENTERO,
+// borraba los IDs de listas ya creadas y funcionando. El siguiente ciclo completo, al no
+// encontrar ningún id configurado, las volvió a crear de cero — DUPLICADAS (138-144 → 161-167).
+// Ahora un valor null/vacío en estos campos concretos NUNCA borra lo que ya había: solo un
+// valor real (el titular eligiendo otra lista del desplegable) lo sustituye. El resto de
+// campos del wizard (vendedores, laboratorios, RGPD...) sigue siendo reemplazo completo, como
+// siempre — ahí sí tiene sentido que "vacío" signifique "lo he quitado a propósito".
+const CAMPOS_LISTA_AUTOGESTIONADOS = [
+  'listIncentivadosStar', 'listIncentivados', 'listMaxRotA', 'listMaxRotB',
+  'listResto', 'listParados', 'listConsolidado',
+  'listColorVerde', 'listColorAmarillo', 'listColorGris', 'listColorNegro',
+  'listNegra', 'listPubFavoritos', 'listPubVerde', 'listPubAmarillo', 'listPubGris',
+];
 ipcMain.handle('wizard-save', async (_, wizardCfg) => {
   const cfg = store.get('config', {});
+  const anterior = cfg.wizard || {};
+  for (const campo of CAMPOS_LISTA_AUTOGESTIONADOS) {
+    if (!wizardCfg[campo] && anterior[campo]) wizardCfg[campo] = anterior[campo];
+  }
   cfg.wizard = wizardCfg;
   store.set('config', cfg);
   applyConfig(cfg);
