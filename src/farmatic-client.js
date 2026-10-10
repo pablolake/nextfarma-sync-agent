@@ -1952,6 +1952,28 @@ async function aplicarColorALista(idLista, colorRGB) {
   }
 }
 
+// Quita cualquier círculo de color de una lista (09/10/2026, petición explícita: "las listas
+// de favoritos no deberían tener color" — las 7 de categoría nunca tuvieron una entrada en
+// XF_REPRESENTA_COLOR, así que nuestro código nunca les pintó nada). El círculo que se veía en
+// jose venía de RepresentaColor.IdCodigo coincidiendo por pura casualidad numérica con el de
+// una lista vieja ya borrada que SÍ tuvo color (IdLista no es autonumérico en esta instalación,
+// se calcula a mano como MAX+1 — ver asegurarListas — así que un ID libre por borrado se
+// reutiliza sin que nadie limpiara antes su fila huérfana en RepresentaColor). Idempotente: si
+// no hay fila, no hace nada.
+async function quitarColorDeLista(idLista) {
+  const p = await getPool();
+  const tblR = await p.request().query(`SELECT name FROM sys.tables WHERE name = 'RepresentaColor'`).catch(() => ({ recordset: [] }));
+  if (!tblR.recordset.length) return { ok: false, motivo: 'no existe RepresentaColor' };
+  try {
+    await p.request().input('id', sql.VarChar, String(idLista))
+      .query(`DELETE FROM RepresentaColor WHERE Entorno = 'L' AND IdCodigo = @id`);
+    return { ok: true };
+  } catch (err) {
+    log.warn(`No se pudo quitar el color de la lista ${idLista} en RepresentaColor:`, err.message);
+    return { ok: false, motivo: err.message };
+  }
+}
+
 // Categorías que ni la config guardada ni la detección por nombre han resuelto todavía
 // (sin env var puesta). Se usa para avisar al titular en el SaaS de que puede terminar
 // de configurar el wizard — nunca para escribir ni para bloquear el sync.
@@ -2990,6 +3012,10 @@ async function limpiarListasXFDuplicadas() {
       try {
         await p.request().input('id', sql.Int, fila.id).query(`DELETE FROM ItemListaArticu WHERE XItem_IdLista = @id`);
         await p.request().input('id', sql.Int, fila.id).query(`DELETE FROM ListaArticu WHERE IdLista = @id`);
+        // Se borra también su círculo (si tenía) — un IdLista borrado puede reciclarse para una
+        // lista nueva más adelante (ver quitarColorDeLista), y sin esto esa lista nueva
+        // heredaría el color de la que acabamos de borrar.
+        await quitarColorDeLista(fila.id);
         borradas.push({ id: fila.id, nombre, conservada: aConservar.id });
       } catch (err) {
         conservadasConContenido.push(`${nombre} (IdLista ${fila.id}): no se pudo borrar — ${err.message}`);
@@ -3178,6 +3204,13 @@ async function asegurarColoresDeListas() {
   for (const [bucket, envKey] of Object.entries(LISTA_ROJA_ENV)) {
     const id = process.env[envKey]
     if (id && XF_REPRESENTA_COLOR[bucket] != null) await aplicarColorALista(Number(id), XF_REPRESENTA_COLOR[bucket])
+  }
+  // Las 7 de categoría NUNCA deben tener círculo (09/10/2026, petición explícita: "las listas
+  // de favoritos no deberían tener color") — se quita cualquiera que hayan heredado por
+  // reciclaje de IdLista de una lista vieja ya borrada que sí tuvo color (ver quitarColorDeLista).
+  for (const envKey of Object.values(CATEGORIA_ENV)) {
+    const id = process.env[envKey]
+    if (id) await quitarColorDeLista(Number(id))
   }
 }
 const reconciliarColoresPublicitarios = (grupos) =>
