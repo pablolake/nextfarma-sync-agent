@@ -1273,6 +1273,22 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
     diagnosticoIva = 'Predictor de descuentos: esta instalación no tiene tablas Grupoiva/Tablaiva — todas las recepciones se mandan sin IVA/RE, así que el servidor las descarta (motivo "sin_iva").';
   }
 
+  // laboratorio/n_laboratorios/codigos_dto (11/10/2026, documento "XestFarma — Lógica de
+  // compra, parte 1"): el servidor ya usaba esta tabla para Receta vía calcularCanalNoOptimo
+  // (los datos crudos ya llegaban, solo se descartaban para el predictor de Publicitarios) —
+  // estos 3 campos son lo que le falta para clasificar el CANAL por la FORMA de la recepción
+  // (§1.2: nº de laboratorios distintos en el MISMO albarán, partición por id_recep — "el
+  // proveedor no dice el canal") en vez de por el nombre del proveedor. codigos_dto es
+  // best-effort (regla 1, "ZDTR" marca tránsfer): si no se resuelve, se manda NULL y esa regla
+  // simplemente nunca dispara, cae a la regla 2 (la que de verdad decide).
+  const colCodigoDto = await resolverAtributoColumna({
+    entidad: 'LINEA_RECEP', atributo: 'codigo_descuento',
+    candidatos: ['CodigoDescuento', 'CodDto', 'TipoDescuento', 'CodigoPromo'],
+    columnasReales: colsLR,
+    descripcion: 'Columna de LineaRecep con un código de tipo de descuento/promoción de esa línea (p.ej. contiene "ZDTR" para marcar un tránsfer facturado por el laboratorio) — puede no existir en esta instalación.',
+  }).catch(() => null);
+  const selCodigosDto = colCodigoDto ? `LTRIM(RTRIM(CAST(lr.${colCodigoDto} AS VARCHAR(50))))` : `NULL`;
+
   const fechaLim = new Date();
   fechaLim.setDate(fechaLim.getDate() - diasAtras);
   const fechaISO = fechaLim.toISOString().slice(0, 10);
@@ -1289,7 +1305,10 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
         ${selPiva}                    AS piva,
         ${selPreq}                    AS preq,
         ${selProveedorNombre}         AS proveedor_nombre,
-        r.${colIdRecep}               AS id_recep
+        r.${colIdRecep}               AS id_recep,
+        LTRIM(RTRIM(a.Laboratorio))   AS laboratorio,
+        ${selCodigosDto}              AS codigos_dto,
+        COUNT(DISTINCT LTRIM(RTRIM(a.Laboratorio))) OVER (PARTITION BY r.${colIdRecep}) AS n_laboratorios
       FROM ${nombreLineaRecep} lr
       INNER JOIN ${nombreRecep} r ON lr.${colIdLineaRecep} = r.${colIdRecep}
       INNER JOIN Articu a ON LTRIM(RTRIM(a.IdArticu)) = LTRIM(RTRIM(lr.${colCodigo}))
@@ -1325,6 +1344,9 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
       preq,
       proveedor_nombre: r.proveedor_nombre ? String(r.proveedor_nombre).trim() : null,
       id_recep: String(r.id_recep),
+      laboratorio: r.laboratorio ? String(r.laboratorio).trim() : null,
+      codigos_dto: r.codigos_dto ? String(r.codigos_dto).trim() : null,
+      n_laboratorios: Number(r.n_laboratorios) || 1,
     });
   }
   log.info(`fetchRecepcionesDescuentoReal: ${lineas.length} líneas de recepción (${diasAtras} días)`);
