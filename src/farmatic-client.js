@@ -1418,7 +1418,6 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
   let diagnosticoDescartes = null;
   if (colBaja) {
     const motivoCase = `CASE
-        WHEN RTRIM(r.${colIdRecep}) IS NULL THEN 'SIN RECEPCION'
         WHEN ${colProvIdRecep ? `LTRIM(RTRIM(r.${colProvIdRecep})) = '8888'` : `0=1`} THEN 'HISTORICO MIGRADO'
         WHEN ISNULL(lr.${colBaja},0) <> 0 THEN 'LINEA DE BAJA'
         WHEN lr.${colCantidad} = 0 THEN 'FALTA (SIN SERVIR)'
