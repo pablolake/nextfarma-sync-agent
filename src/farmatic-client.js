@@ -1364,13 +1364,14 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
   // migrado de otro sistema — sin importe real que inferir, se descartan en origen.
   const whereBaja = colBaja ? `AND ISNULL(lr.${colBaja}, 0) = 0` : ``;
   const whereNoMigrado = colProvIdRecep ? `AND LTRIM(RTRIM(r.${colProvIdRecep})) <> '8888'` : ``;
-  // Importe = 0 con Recibidas > 0 (verificado): línea regalada entera o error de grabación — un
-  // coste 0 arruinaría cualquier media/condición. Solo se puede aplicar si se resolvió la
-  // columna de importe total.
-  // (lr.Importe IS NULL OR ...) para no descartar de más: el filtro real (§5 de la guía) es
-  // "Importe = 0 CON Recibidas > 0" (regalo/error) — un Importe NULL es un caso distinto, sin
-  // documentar, que se deja pasar (el servidor ya cae a importe_puc cuando no hay total).
-  const whereImporteTotal = colImporteTotal ? `AND (lr.${colImporteTotal} IS NULL OR lr.${colImporteTotal} <> 0)` : ``;
+  // Importe > 0 (releído con más cuidado, 12/10/2026: la consulta VALIDADA del §9, Q2, usa
+  // "AND l.Importe > 0" estricto — más estrecho que la frase de prosa del §5, "Importe = 0 con
+  // Recibidas > 0", que no menciona negativos. Se seguro usar Q2, que el propio documento dice
+  // que está "probada sobre SQL Server": excluye tanto 0 (regalo/error) como negativos
+  // (devolución/abono reflejado como importe negativo en la misma línea, nunca visto en la
+  // muestra pero tampoco un coste real). Importe NULL se deja pasar igual — el servidor cae a
+  // importe_puc cuando no hay total.
+  const whereImporteTotal = colImporteTotal ? `AND (lr.${colImporteTotal} IS NULL OR lr.${colImporteTotal} > 0)` : ``;
 
   let diagnosticoQuery = null
   const result = await p.request()
@@ -1408,6 +1409,35 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
       diagnosticoQuery = `Predictor de descuentos: la consulta de recepciones falló — ${err.message}`;
       return { recordset: [] };
     });
+
+  // Control de filas descartadas (§5/Q3 de la guía de extracción: "el extractor no puede dejar
+  // caer filas en silencio") — los filtros de arriba (Baja, '8888', Importe<=0) descartan en el
+  // propio WHERE sin contar nada; esta segunda consulta, barata y best-effort, cuenta por
+  // motivo dentro de la MISMA ventana para poder avisar si un volumen grande se está
+  // perdiendo. No bloquea nada si falla.
+  let diagnosticoDescartes = null;
+  if (colBaja) {
+    const motivoCase = `CASE
+        WHEN RTRIM(r.${colIdRecep}) IS NULL THEN 'SIN RECEPCION'
+        WHEN ${colProvIdRecep ? `LTRIM(RTRIM(r.${colProvIdRecep})) = '8888'` : `0=1`} THEN 'HISTORICO MIGRADO'
+        WHEN ISNULL(lr.${colBaja},0) <> 0 THEN 'LINEA DE BAJA'
+        WHEN lr.${colCantidad} = 0 THEN 'FALTA (SIN SERVIR)'
+        ${colImporteTotal ? `WHEN lr.${colImporteTotal} <= 0 THEN 'IMPORTE <= 0'` : ``}
+        ELSE 'VALIDA' END`;
+    const descartesR = await p.request()
+      .input('fecha2', sql.Date, fechaISO)
+      .query(`
+        SELECT ${motivoCase} AS motivo, COUNT(*) AS lineas
+          FROM ${nombreLineaRecep} lr
+          INNER JOIN ${nombreRecep} r ON lr.${colIdLineaRecep} = r.${colIdRecep}
+         WHERE r.${colFecha} >= @fecha2
+         GROUP BY ${motivoCase}
+      `).catch(() => ({ recordset: [] }));
+    const descartes = descartesR.recordset.filter(d => d.motivo !== 'VALIDA' && Number(d.lineas) > 0);
+    if (descartes.length) {
+      diagnosticoDescartes = `Predictor de descuentos: líneas descartadas en origen — ${descartes.map(d => `${d.motivo}: ${d.lineas}`).join(', ')}.`;
+    }
+  }
 
   const lineas = [];
   for (const r of result.recordset) {
@@ -1460,6 +1490,7 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
   if (diagnosticoQuery) notas.push(diagnosticoQuery)
   else {
     if (diagnosticoIva) notas.push(diagnosticoIva)
+    if (diagnosticoDescartes) notas.push(diagnosticoDescartes)
     if (lineas.length === 0) notas.push(`Predictor de descuentos: 0 líneas de recepción en los últimos ${diasAtras} días (puede ser normal si no ha habido pedido directo reciente).`)
   }
   // _4DB_CAT_Historico (12/10/2026, §6.2 de la guía de extracción): condición de Cofares
@@ -1513,13 +1544,25 @@ async function fetch4DBHistoricoPorCns(p, cns) {
   }).catch(() => null);
   const cnsIn = cnsValidos.map(c => `'${c}'`).join(',');
   const selOrderCode = colOrderCode ? `, LTRIM(RTRIM(CAST(h.${colOrderCode} AS VARCHAR(50)))) AS order_code` : '';
+  // D1 (§4 de la guía de extracción, "Necesario en... los catálogos _4DB_*"): el código en
+  // estas tablas puede venir como EAN-13 (empieza por 847 → quitar los 6 primeros dígitos y
+  // los últimos, SUBSTRING 7,6) o con 7 dígitos (LEFT 6) en vez de los 6 que ya trae LINEARECEP
+  // — sin esto, el cruce con las recepciones (normalizadas a 6) nunca encontraría nada en una
+  // instalación donde el catálogo 4DB usa EAN, dejando el contraste con _4DB_CAT_Historico
+  // silenciosamente vacío. Se normaliza en el WHERE (para que el filtro encuentre las filas) y
+  // en el SELECT (para que el cn devuelto ya venga comparable).
+  const normCn = `CASE
+      WHEN LEN(LTRIM(RTRIM(CAST(h.${colCn} AS VARCHAR(20))))) = 13 AND LEFT(LTRIM(RTRIM(CAST(h.${colCn} AS VARCHAR(20)))), 3) = '847'
+        THEN SUBSTRING(LTRIM(RTRIM(CAST(h.${colCn} AS VARCHAR(20)))), 7, 6)
+      ELSE LEFT(LTRIM(RTRIM(CAST(h.${colCn} AS VARCHAR(20)))), 6)
+    END`;
   const result = await p.request().query(`
-    SELECT LTRIM(RTRIM(CAST(h.${colCn} AS VARCHAR(20)))) AS cn,
+    SELECT ${normCn} AS cn,
            h.${colFecha} AS fecha,
            CAST(REPLACE(CAST(h.${colPvfCli} AS VARCHAR(20)), ',', '.') AS decimal(10,3)) AS pvf_cli
            ${selOrderCode}
     FROM _4DB_CAT_Historico h
-    WHERE h.${colCn} IN (${cnsIn})
+    WHERE ${normCn} IN (${cnsIn})
   `).catch(err => {
     log.warn('fetch4DBHistoricoPorCns falló:', err.message);
     return { recordset: [] };
