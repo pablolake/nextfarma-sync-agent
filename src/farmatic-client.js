@@ -1116,31 +1116,64 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
   const colsLR = new Set((await p.request().query(
     `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${nombreLineaRecep}'`
   )).recordset.map(c => String(c.COLUMN_NAME)));
+  // Nombres verificados contra datos reales (11/10/2026, "Guía de Extracción de Recepciones" —
+  // dataset de validación: 54 recepciones de un CN con 4 proveedores distintos, 2021-2026) —
+  // van primeros en la lista de candidatos (más confianza), nunca sustituyen el resolvedor
+  // dinámico: otra instalación puede seguir llamándolo distinto.
   const colCodigo = await resolverAtributoColumna({
-    entidad: 'LINEA_RECEP', atributo: 'codigo', candidatos: ['Codigo', 'IdArticu'],
+    entidad: 'LINEA_RECEP', atributo: 'codigo', candidatos: ['XArt_IdArticu', 'Codigo', 'IdArticu'],
     columnasReales: colsLR, descripcion: 'Columna de LineaRecep con el código nacional del artículo recibido.',
   });
   const colCantidad = await resolverAtributoColumna({
-    entidad: 'LINEA_RECEP', atributo: 'cantidad', candidatos: ['Cantidad'],
-    columnasReales: colsLR, descripcion: 'Columna de LineaRecep con la cantidad de unidades recibidas en cada línea.',
+    entidad: 'LINEA_RECEP', atributo: 'cantidad', candidatos: ['Recibidas', 'Cantidad'],
+    columnasReales: colsLR, descripcion: 'Columna de LineaRecep con la cantidad de unidades REALMENTE SERVIDAS en cada línea (no las pedidas).',
+  });
+  // Importe (TOTAL de la línea, no unitario — trampa real documentada: una recepción de 42
+  // unidades trae Importe=94,3614, no 2,2467) es la fuente de verdad del coste; ImportePuc es
+  // un campo aparte que coincide con Importe/Recibidas en las líneas servidas de la muestra
+  // validada, se manda como cruce/respaldo pero el coste real se calcula siempre como
+  // Importe/Recibidas, nunca confiando en ImportePuc a ciegas.
+  const colImporteTotal = await resolverAtributoColumna({
+    entidad: 'LINEA_RECEP', atributo: 'importe_total', candidatos: ['Importe'],
+    columnasReales: colsLR,
+    descripcion: 'Columna de LineaRecep con el importe TOTAL de la línea completa (con impuestos), NO el unitario — para una línea de 42 unidades, este campo trae el importe de las 42 juntas, se divide entre las unidades servidas para obtener el coste por unidad.',
   });
   const colImportePuc = await resolverAtributoColumna({
-    entidad: 'LINEA_RECEP', atributo: 'importe_puc', candidatos: ['ImportePuc', 'ImporteLinea', 'PrecioConIva'],
+    entidad: 'LINEA_RECEP', atributo: 'importe_puc', candidatos: ['ImportePuc'],
     columnasReales: colsLR,
-    descripcion: 'Columna de LineaRecep con el importe CON impuestos (IVA y recargo de equivalencia incluidos) de esa línea de recepción — precio de compra real pagado, no el neto sin impuestos.',
+    descripcion: 'Columna de LineaRecep con el coste UNITARIO ya calculado de esa línea (con impuestos) — campo de cruce/respaldo, el coste real se calcula como Importe/Recibidas.',
+  });
+  // ImportePvp (crítico): el PVP vigente EL DÍA de esa recepción, no el de hoy (Articu.Pvp) —
+  // trampa real documentada: un PVP que pasó de 6,37 a 6,71€ hace que todas las líneas
+  // anteriores al cambio salgan con el descuento desplazado 5,3 puntos si se usa el PVP actual.
+  const colImportePvp = await resolverAtributoColumna({
+    entidad: 'LINEA_RECEP', atributo: 'importe_pvp', candidatos: ['ImportePvp'],
+    columnasReales: colsLR,
+    descripcion: 'Columna de LineaRecep con el PVP unitario (con IVA) VIGENTE EN EL MOMENTO de esa recepción concreta — no el PVP actual del artículo, que puede haber cambiado desde entonces. Es la base de precio correcta para calcular el descuento de una línea histórica.',
   });
   if (!colCodigo || !colCantidad || !colImportePuc) {
     log.warn('fetchRecepcionesDescuentoReal: LineaRecep sin columnas clave (falta importe con impuestos).');
     return { lineas: [], diagnostico: 'Predictor de descuentos: LineaRecep no tiene columna resuelta de código/cantidad/importe con impuestos — recepciones no disponibles.' };
   }
+  const colBaja = await resolverAtributoColumna({
+    entidad: 'LINEA_RECEP', atributo: 'baja', candidatos: ['Baja'],
+    columnasReales: colsLR, descripcion: 'Columna de LineaRecep que marca la línea como anulada (flag/bit) — una línea de baja no debe contar.',
+  }).catch(() => null);
 
   const colsRec = new Set((await p.request().query(
     `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '${nombreRecep}'`
   )).recordset.map(c => String(c.COLUMN_NAME)));
   const colFecha = await resolverAtributoColumna({
-    entidad: 'RECEP', atributo: 'fecha', candidatos: ['FechaAlbaran', 'Fecha', 'FechaRecep'],
-    columnasReales: colsRec, descripcion: 'Columna de Recep con la fecha del albarán/recepción de mercancía.',
+    entidad: 'RECEP', atributo: 'fecha', candidatos: ['Fecha', 'FechaAlbaran', 'FechaRecep'],
+    columnasReales: colsRec, descripcion: 'Columna de Recep con la fecha del albarán/recepción de mercancía (sin hora, o con hora a 00:00).',
   });
+  // Hora (verificado): fecha+hora COMPLETAS, es la que de verdad vale para ordenar por recencia
+  // — salvo en filas migradas de otro sistema, donde trae el centinela 1900-01-01 (se detecta y
+  // se cae a Fecha para esas filas, nunca se usa el centinela tal cual).
+  const colHora = await resolverAtributoColumna({
+    entidad: 'RECEP', atributo: 'hora', candidatos: ['Hora'],
+    columnasReales: colsRec, descripcion: 'Columna de Recep con la fecha Y hora completas de la recepción (más precisa que la columna de solo fecha) — en filas migradas de otro sistema puede traer el valor centinela 1900-01-01, que no debe usarse.',
+  }).catch(() => null);
   const colProvIdRecep = await resolverAtributoColumna({
     entidad: 'RECEP', atributo: 'proveedor_id', candidatos: ['XProv_IdProveedor', 'IdProveedor'],
     columnasReales: colsRec, descripcion: 'Columna de Recep con el código del proveedor/distribuidor real de esa recepción (quien vendió la mercancía, puede ser una cooperativa como Cofares o el propio laboratorio).',
@@ -1293,15 +1326,38 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
   fechaLim.setDate(fechaLim.getDate() - diasAtras);
   const fechaISO = fechaLim.toISOString().slice(0, 10);
 
+  // Fecha real de ordenación (verificado): Hora trae fecha+hora completas y es la que vale,
+  // salvo en filas migradas (centinela 1900-01-01) — ahí se cae a Fecha. Si no hay columna Hora
+  // resuelta, Fecha sola (puede venir a 00:00, pero sigue siendo correcta para filtrar/ordenar
+  // por día).
+  const selFechaReal = colHora
+    ? `CASE WHEN r.${colHora} > '1901-01-01' THEN r.${colHora} ELSE r.${colFecha} END`
+    : `r.${colFecha}`;
+  const selImporteTotal = colImporteTotal ? `lr.${colImporteTotal}` : `NULL`;
+  const selImportePvp = colImportePvp ? `lr.${colImportePvp}` : `NULL`;
+  // Baja/proveedor '8888' (verificado, §5 de la guía de extracción): línea anulada o histórico
+  // migrado de otro sistema — sin importe real que inferir, se descartan en origen.
+  const whereBaja = colBaja ? `AND ISNULL(lr.${colBaja}, 0) = 0` : ``;
+  const whereNoMigrado = colProvIdRecep ? `AND LTRIM(RTRIM(r.${colProvIdRecep})) <> '8888'` : ``;
+  // Importe = 0 con Recibidas > 0 (verificado): línea regalada entera o error de grabación — un
+  // coste 0 arruinaría cualquier media/condición. Solo se puede aplicar si se resolvió la
+  // columna de importe total.
+  // (lr.Importe IS NULL OR ...) para no descartar de más: el filtro real (§5 de la guía) es
+  // "Importe = 0 CON Recibidas > 0" (regalo/error) — un Importe NULL es un caso distinto, sin
+  // documentar, que se deja pasar (el servidor ya cae a importe_puc cuando no hay total).
+  const whereImporteTotal = colImporteTotal ? `AND (lr.${colImporteTotal} IS NULL OR lr.${colImporteTotal} <> 0)` : ``;
+
   let diagnosticoQuery = null
   const result = await p.request()
     .input('fecha', sql.Date, fechaISO)
     .query(`
       SELECT
         LTRIM(RTRIM(lr.${colCodigo})) AS codigo_nacional,
-        r.${colFecha}                 AS fecha,
+        ${selFechaReal}                AS fecha,
         lr.${colCantidad}             AS cantidad,
         lr.${colImportePuc}           AS importe_puc,
+        ${selImporteTotal}            AS importe_total,
+        ${selImportePvp}              AS importe_pvp,
         ${selPiva}                    AS piva,
         ${selPreq}                    AS preq,
         ${selProveedorNombre}         AS proveedor_nombre,
@@ -1317,6 +1373,9 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
       WHERE r.${colFecha} >= @fecha
         AND lr.${colCantidad} > 0
         AND lr.${colCodigo} IS NOT NULL
+        ${whereBaja}
+        ${whereNoMigrado}
+        ${whereImporteTotal}
     `).catch(err => {
       log.warn('fetchRecepcionesDescuentoReal falló:', err.message);
       diagnosticoQuery = `Predictor de descuentos: la consulta de recepciones falló — ${err.message}`;
@@ -1335,11 +1394,21 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
     if (importePuc == null || isNaN(importePuc) || importePuc <= 0) continue;
     const piva = r.piva != null && !isNaN(Number(r.piva)) ? Number(r.piva) : null;
     const preq = r.preq != null && !isNaN(Number(r.preq)) ? Number(r.preq) : null;
+    // importe_total/importe_pvp (verificado, guía de extracción 11/10/2026): el coste real se
+    // calcula SIEMPRE como importe_total/cantidad (nunca confiando en importe_puc a ciegas), y
+    // importe_pvp es el PVP del DÍA de la recepción — crítico para no desplazar el descuento de
+    // líneas históricas cuando el PVP ya cambió desde entonces. Ambos opcionales (si la columna
+    // no resolvió en esta instalación, se manda null y el servidor cae a importe_puc/PVP actual
+    // como antes).
+    const importeTotal = r.importe_total != null && !isNaN(Number(r.importe_total)) ? Number(r.importe_total) : null;
+    const importePvp = r.importe_pvp != null && !isNaN(Number(r.importe_pvp)) ? Number(r.importe_pvp) : null;
     lineas.push({
       cn,
       fecha: fecha.toISOString().slice(0, 10),
       cantidad,
       importe_puc: +importePuc.toFixed(4),
+      importe_total: importeTotal != null ? +importeTotal.toFixed(4) : null,
+      importe_pvp: importePvp != null ? +importePvp.toFixed(4) : null,
       piva,
       preq,
       proveedor_nombre: r.proveedor_nombre ? String(r.proveedor_nombre).trim() : null,
