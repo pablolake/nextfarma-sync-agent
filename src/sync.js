@@ -552,15 +552,19 @@ async function runSync(opts = {}) {
   // ventana más larga (90 días) e independiente del detalle de arriba: esto alimenta el
   // cálculo de dto_real por línea, no la reconciliación de pedidos.
   let recepcionesDescuentoReal = []
+  let historico4dbReceta = []
   try {
     // 06/09/2026: fetchRecepcionesDescuentoReal devuelve { lineas, diagnostico } — antes solo
     // devolvía el array y cualquier guardarraíl interno que fallara (tablas/columnas no
     // resueltas, join de IVA no resoluble) quedaba invisible en el log local del cliente,
     // nunca llegaba a last_sync_warnings_detalle. Encontrado auditando por qué esta tabla no
     // tenía ni una fila en producción semanas después de desplegar el predictor.
+    // historico4db (12/10/2026): condición de Cofares vigente en cada fecha pasada, para
+    // contrastar las recepciones de Receta por canal COOPERATIVA — ver fetch4DBHistoricoPorCns.
     const r = await farmatic.fetchRecepcionesDescuentoReal(backfillPendiente() ? 730 : 365);
     recepcionesDescuentoReal = r.lineas;
-    log.info(`✓ ${recepcionesDescuentoReal.length} líneas para predictor de descuentos (últimos 90 días)`);
+    historico4dbReceta = r.historico4db || [];
+    log.info(`✓ ${recepcionesDescuentoReal.length} líneas para predictor de descuentos (últimos 90 días), ${historico4dbReceta.length} filas de _4DB_CAT_Historico`);
     if (r.diagnostico) warn(r.diagnostico);
   } catch (e) {
     warn('Recepciones (descuento real) no disponibles: ' + e.message);
@@ -918,7 +922,7 @@ async function runSync(opts = {}) {
     try {
       const r = await api.enviarRecepcionesDescuentoReal(recepcionesDescuentoReal, (lote, totalLotes) => {
         step('env-recep-dto', `Enviando predictor de descuentos a XestFarma… (lote ${lote}/${totalLotes})`, 'running');
-      });
+      }, historico4dbReceta);
       log.info(`✓ Predictor de descuentos: ${r.guardados} líneas guardadas, ${r.descartados} descartadas por el servidor`);
       step('env-recep-dto', `Predictor de descuentos: ${r.guardados} líneas guardadas`, r.errors > 0 ? 'warn' : 'ok');
     } catch (e) {

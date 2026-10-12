@@ -1155,6 +1155,17 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
     log.warn('fetchRecepcionesDescuentoReal: LineaRecep sin columnas clave (falta importe con impuestos).');
     return { lineas: [], diagnostico: 'Predictor de descuentos: LineaRecep no tiene columna resuelta de código/cantidad/importe con impuestos — recepciones no disponibles.' };
   }
+  // Descuento1-4 + DtoBonif (D8/D9, 12/10/2026, best-effort — NO son la condición de la compra,
+  // ver §3.4 de la guía: en parte configuración del proveedor, en parte un valor que Farmatic
+  // recalcula del importe. Se extraen solo para CONTRASTAR contra el importe real — si no
+  // cuadran (D9), es una marca de auditoría, nunca se usan para calcular el coste.
+  const colDescuentos = await Promise.all(['Descuento1', 'Descuento2', 'Descuento3', 'Descuento4', 'DtoBonif'].map(nombre =>
+    resolverAtributoColumna({
+      entidad: 'LINEA_RECEP', atributo: `descuento_${nombre.toLowerCase()}`, candidatos: [nombre],
+      columnasReales: colsLR, descripcion: `Columna de LineaRecep "${nombre}" — un % de descuento compuesto multiplicativamente con los demás, NO la condición real de la compra (solo para contrastar contra el importe).`,
+    }).catch(() => null)
+  ));
+  const [colD1, colD2, colD3, colD4, colDBonif] = colDescuentos;
   const colBaja = await resolverAtributoColumna({
     entidad: 'LINEA_RECEP', atributo: 'baja', candidatos: ['Baja'],
     columnasReales: colsLR, descripcion: 'Columna de LineaRecep que marca la línea como anulada (flag/bit) — una línea de baja no debe contar.',
@@ -1335,6 +1346,11 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
     : `r.${colFecha}`;
   const selImporteTotal = colImporteTotal ? `lr.${colImporteTotal}` : `NULL`;
   const selImportePvp = colImportePvp ? `lr.${colImportePvp}` : `NULL`;
+  const selD1 = colD1 ? `lr.${colD1}` : `NULL`;
+  const selD2 = colD2 ? `lr.${colD2}` : `NULL`;
+  const selD3 = colD3 ? `lr.${colD3}` : `NULL`;
+  const selD4 = colD4 ? `lr.${colD4}` : `NULL`;
+  const selDBonif = colDBonif ? `lr.${colDBonif}` : `NULL`;
   // Baja/proveedor '8888' (verificado, §5 de la guía de extracción): línea anulada o histórico
   // migrado de otro sistema — sin importe real que inferir, se descartan en origen.
   const whereBaja = colBaja ? `AND ISNULL(lr.${colBaja}, 0) = 0` : ``;
@@ -1358,6 +1374,7 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
         lr.${colImportePuc}           AS importe_puc,
         ${selImporteTotal}            AS importe_total,
         ${selImportePvp}              AS importe_pvp,
+        ${selD1} AS d1, ${selD2} AS d2, ${selD3} AS d3, ${selD4} AS d4, ${selDBonif} AS dbonif,
         ${selPiva}                    AS piva,
         ${selPreq}                    AS preq,
         ${selProveedorNombre}         AS proveedor_nombre,
@@ -1402,6 +1419,9 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
     // como antes).
     const importeTotal = r.importe_total != null && !isNaN(Number(r.importe_total)) ? Number(r.importe_total) : null;
     const importePvp = r.importe_pvp != null && !isNaN(Number(r.importe_pvp)) ? Number(r.importe_pvp) : null;
+    // D8/D9 (best-effort): descuentos declarados, solo para que el servidor contraste contra el
+    // importe real — nunca para calcular el coste (ver comentario en la resolución de columnas).
+    const numOrNull = v => v != null && !isNaN(Number(v)) ? Number(v) : null;
     lineas.push({
       cn,
       fecha: fecha.toISOString().slice(0, 10),
@@ -1409,6 +1429,7 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
       importe_puc: +importePuc.toFixed(4),
       importe_total: importeTotal != null ? +importeTotal.toFixed(4) : null,
       importe_pvp: importePvp != null ? +importePvp.toFixed(4) : null,
+      d1: numOrNull(r.d1), d2: numOrNull(r.d2), d3: numOrNull(r.d3), d4: numOrNull(r.d4), dbonif: numOrNull(r.dbonif),
       piva,
       preq,
       proveedor_nombre: r.proveedor_nombre ? String(r.proveedor_nombre).trim() : null,
@@ -1430,7 +1451,76 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
     if (diagnosticoIva) notas.push(diagnosticoIva)
     if (lineas.length === 0) notas.push(`Predictor de descuentos: 0 líneas de recepción en los últimos ${diasAtras} días (puede ser normal si no ha habido pedido directo reciente).`)
   }
-  return { lineas, diagnostico: notas.length ? notas.join(' ') : null };
+  // _4DB_CAT_Historico (12/10/2026, §6.2 de la guía de extracción): condición de Cofares
+  // VIGENTE en el momento de una compra PASADA — _4DB_CAT_Models es una foto de HOY y se
+  // sobrescribe, así que para contrastar una recepción de hace meses hace falta esta tabla
+  // histórica. Se pide solo para los CN que aparecen en este lote (no todo el catálogo). Si la
+  // tabla no existe, o no resuelve columnas, se manda vacío y el servidor sigue con su
+  // simplificación actual (COOPERATIVA respaldada solo si es Cofares, sin contraste numérico).
+  const cnsDelLote = [...new Set(lineas.map(l => l.cn))];
+  const historico4db = await fetch4DBHistoricoPorCns(p, cnsDelLote);
+
+  return { lineas, historico4db, diagnostico: notas.length ? notas.join(' ') : null };
+}
+
+// _4DB_CAT_Historico: condición de Cofares vigente en una fecha pasada (PvfCli = neto previsto
+// en el momento del pedido, OrderCode = modelo aplicado) — a diferencia de _4DB_CAT_Models/
+// _4DB_CAT_CatalogoArt (fetch4DBDescuentos, una foto de HOY), esta tabla conserva histórico.
+// Nombres de columna no confirmados más allá de PvfCli/OrderCode (la guía de extracción remite
+// al documento anterior, ERPs_y_Mayoristas.docx, que no está disponible aquí) — resolución
+// dinámica igual que el resto del fichero, nunca se asume nada sin comprobarlo. Los campos
+// numéricos de estas tablas vienen como texto con coma decimal (verificado, §6.2): se
+// normalizan con REPLACE antes de convertir.
+async function fetch4DBHistoricoPorCns(p, cns) {
+  if (!cns.length) return [];
+  const cnsValidos = cns.filter(c => /^\d{5,}$/.test(c));
+  if (!cnsValidos.length) return [];
+  const tabla = await p.request().query(`SELECT name FROM sys.tables WHERE name = '_4DB_CAT_Historico'`).catch(() => ({ recordset: [] }));
+  if (!tabla.recordset.length) return [];
+  const cols = new Set((await p.request().query(
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '_4DB_CAT_Historico'`
+  )).recordset.map(c => String(c.COLUMN_NAME)));
+  const colCn = await resolverAtributoColumna({
+    entidad: '4DB_HISTORICO', atributo: 'codigo', candidatos: ['codigonacional', 'CodigoNacional'],
+    columnasReales: cols, descripcion: 'Columna de _4DB_CAT_Historico con el código nacional del artículo.',
+  }).catch(() => null);
+  const colFecha = await resolverAtributoColumna({
+    entidad: '4DB_HISTORICO', atributo: 'fecha', candidatos: ['Fecha', 'FechaCatalogo', 'FechaActualizacion'],
+    columnasReales: cols, descripcion: 'Columna de _4DB_CAT_Historico con la fecha de esa foto histórica del catálogo (para saber qué condición regía en una fecha pasada).',
+  }).catch(() => null);
+  const colPvfCli = await resolverAtributoColumna({
+    entidad: '4DB_HISTORICO', atributo: 'pvf_cli', candidatos: ['PvfCli'],
+    columnasReales: cols, descripcion: 'Columna de _4DB_CAT_Historico con el neto previsto (PVF) vigente en el momento de ese pedido — numérico, pero puede venir como texto con coma decimal.',
+  }).catch(() => null);
+  if (!colCn || !colFecha || !colPvfCli) {
+    log.warn('fetch4DBHistoricoPorCns: _4DB_CAT_Historico sin columnas clave resueltas (código/fecha/PvfCli).');
+    return [];
+  }
+  const colOrderCode = await resolverAtributoColumna({
+    entidad: '4DB_HISTORICO', atributo: 'order_code', candidatos: ['OrderCode'],
+    columnasReales: cols, descripcion: 'Columna de _4DB_CAT_Historico con el modelo/condición de Cofares aplicada en ese pedido.',
+  }).catch(() => null);
+  const cnsIn = cnsValidos.map(c => `'${c}'`).join(',');
+  const selOrderCode = colOrderCode ? `, LTRIM(RTRIM(CAST(h.${colOrderCode} AS VARCHAR(50)))) AS order_code` : '';
+  const result = await p.request().query(`
+    SELECT LTRIM(RTRIM(CAST(h.${colCn} AS VARCHAR(20)))) AS cn,
+           h.${colFecha} AS fecha,
+           CAST(REPLACE(CAST(h.${colPvfCli} AS VARCHAR(20)), ',', '.') AS decimal(10,3)) AS pvf_cli
+           ${selOrderCode}
+    FROM _4DB_CAT_Historico h
+    WHERE h.${colCn} IN (${cnsIn})
+  `).catch(err => {
+    log.warn('fetch4DBHistoricoPorCns falló:', err.message);
+    return { recordset: [] };
+  });
+  return result.recordset
+    .map(r => ({
+      cn: String(r.cn).trim(),
+      fecha: r.fecha ? new Date(r.fecha).toISOString().slice(0, 10) : null,
+      pvf_cli: r.pvf_cli != null && !isNaN(Number(r.pvf_cli)) ? +Number(r.pvf_cli).toFixed(4) : null,
+      order_code: r.order_code ? String(r.order_code).trim() : null,
+    }))
+    .filter(r => r.fecha && r.pvf_cli != null && r.pvf_cli > 0);
 }
 
 // Hermana de fetchRecepcionesRecientes()/fetchRecepcionesDetalle(): aquella colapsa a una

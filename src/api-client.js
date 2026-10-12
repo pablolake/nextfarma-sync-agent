@@ -225,7 +225,10 @@ async function enviarMiembrosListasCategoria(miembros) {
 // farmatic-client.js. El servidor decide scope/guardarraíl/cálculo de dto_real; el agente
 // solo manda la señal cruda por línea. Ventana de 90 días sobre todo el catálogo — igual de
 // grande o más que recepciones-detalle, mismo troceo en lotes.
-async function enviarRecepcionesDescuentoReal(lineas, onLote) {
+// historico4db (12/10/2026, opcional): condición de Cofares vigente en cada fecha pasada, para
+// contrastar recepciones de Receta por canal COOPERATIVA — normalmente pequeño (solo los CN de
+// este lote), se manda entero en cada petición de lote (barato, el servidor hace UPSERT).
+async function enviarRecepcionesDescuentoReal(lineas, onLote, historico4db) {
   const batchSize = parseInt(process.env.BATCH_SIZE, 10) || 500;
   const batches    = chunk(lineas, batchSize);
   const totals     = { total: 0, guardados: 0, descartados: 0, errors: 0 };
@@ -234,7 +237,7 @@ async function enviarRecepcionesDescuentoReal(lineas, onLote) {
     log.info(`Enviando lote recepciones-descuento-real ${i + 1}/${batches.length} (${batches[i].length})...`);
     if (onLote) onLote(i + 1, batches.length);
     try {
-      const r = await request('/api/sync/recepciones-descuento-real', { method: 'POST', body: { lineas: batches[i] } });
+      const r = await request('/api/sync/recepciones-descuento-real', { method: 'POST', body: { lineas: batches[i], historico4db: historico4db?.length ? historico4db : undefined } });
       totals.total += r.total || 0; totals.guardados += r.guardados || 0; totals.descartados += r.descartados || 0;
     } catch (err) {
       log.error(`Lote ${i + 1} falló:`, err.message);
