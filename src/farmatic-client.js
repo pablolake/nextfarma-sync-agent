@@ -1166,6 +1166,14 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
     }).catch(() => null)
   ));
   const [colD1, colD2, colD3, colD4, colDBonif] = colDescuentos;
+  // UDevolver (D11, best-effort): unidades devueltas de esa línea — "para volumen de compra"
+  // (§4 de la guía), nunca para el coste unitario. Se resta de Recibidas al decidir qué canal
+  // tiene más volumen (§4.2 del documento de lógica), para no contar unidades que acabaron
+  // devueltas como si fueran compra real.
+  const colUDevolver = await resolverAtributoColumna({
+    entidad: 'LINEA_RECEP', atributo: 'udevolver', candidatos: ['UDevolver'],
+    columnasReales: colsLR, descripcion: 'Columna de LineaRecep con las unidades DEVUELTAS de esa línea (para calcular el volumen neto de compra, nunca el coste unitario).',
+  }).catch(() => null);
   const colBaja = await resolverAtributoColumna({
     entidad: 'LINEA_RECEP', atributo: 'baja', candidatos: ['Baja'],
     columnasReales: colsLR, descripcion: 'Columna de LineaRecep que marca la línea como anulada (flag/bit) — una línea de baja no debe contar.',
@@ -1351,6 +1359,7 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
   const selD3 = colD3 ? `lr.${colD3}` : `NULL`;
   const selD4 = colD4 ? `lr.${colD4}` : `NULL`;
   const selDBonif = colDBonif ? `lr.${colDBonif}` : `NULL`;
+  const selUDevolver = colUDevolver ? `lr.${colUDevolver}` : `NULL`;
   // Baja/proveedor '8888' (verificado, §5 de la guía de extracción): línea anulada o histórico
   // migrado de otro sistema — sin importe real que inferir, se descartan en origen.
   const whereBaja = colBaja ? `AND ISNULL(lr.${colBaja}, 0) = 0` : ``;
@@ -1375,6 +1384,7 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
         ${selImporteTotal}            AS importe_total,
         ${selImportePvp}              AS importe_pvp,
         ${selD1} AS d1, ${selD2} AS d2, ${selD3} AS d3, ${selD4} AS d4, ${selDBonif} AS dbonif,
+        ${selUDevolver} AS udevolver,
         ${selPiva}                    AS piva,
         ${selPreq}                    AS preq,
         ${selProveedorNombre}         AS proveedor_nombre,
@@ -1430,6 +1440,7 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
       importe_total: importeTotal != null ? +importeTotal.toFixed(4) : null,
       importe_pvp: importePvp != null ? +importePvp.toFixed(4) : null,
       d1: numOrNull(r.d1), d2: numOrNull(r.d2), d3: numOrNull(r.d3), d4: numOrNull(r.d4), dbonif: numOrNull(r.dbonif),
+      udevolver: numOrNull(r.udevolver),
       piva,
       preq,
       proveedor_nombre: r.proveedor_nombre ? String(r.proveedor_nombre).trim() : null,
