@@ -1330,16 +1330,19 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
   // (los datos crudos ya llegaban, solo se descartaban para el predictor de Publicitarios) —
   // estos 3 campos son lo que le falta para clasificar el CANAL por la FORMA de la recepción
   // (§1.2: nº de laboratorios distintos en el MISMO albarán, partición por id_recep — "el
-  // proveedor no dice el canal") en vez de por el nombre del proveedor. codigos_dto es
-  // best-effort (regla 1, "ZDTR" marca tránsfer): si no se resuelve, se manda NULL y esa regla
-  // simplemente nunca dispara, cae a la regla 2 (la que de verdad decide).
-  const colCodigoDto = await resolverAtributoColumna({
-    entidad: 'LINEA_RECEP', atributo: 'codigo_descuento',
-    candidatos: ['CodigoDescuento', 'CodDto', 'TipoDescuento', 'CodigoPromo'],
-    columnasReales: colsLR,
-    descripcion: 'Columna de LineaRecep con un código de tipo de descuento/promoción de esa línea (p.ej. contiene "ZDTR" para marcar un tránsfer facturado por el laboratorio) — puede no existir en esta instalación.',
-  }).catch(() => null);
-  const selCodigosDto = colCodigoDto ? `LTRIM(RTRIM(CAST(lr.${colCodigoDto} AS VARCHAR(50))))` : `NULL`;
+  // proveedor no dice el canal") en vez de por el nombre del proveedor.
+  // codigos_dto (regla 1, "ZDTR" marca tránsfer) NO es una columna de LineaRecep que adivinar:
+  // la "Guía de Extracción de Recepciones" (D15) lo define como la concatenación de
+  // Fedicom_Descuento.tipo, alcanzable solo vía el albarán electrónico (LineaRecepAE →
+  // Fedicom_LineaAlbaran → Fedicom_Descuento). Esa cadena de tablas no está implementada
+  // (deliberado, igual que el resto de la familia Fedicom: la propia muestra validada del
+  // documento tiene LineaRecepAE.NumeroAlbaran NULL en el 100% de las líneas reales, así que
+  // la regla 1 no dispararía en esa instalación ni implementándolo). Se manda NULL siempre y
+  // esa regla simplemente nunca dispara, cae a la regla 2 (la que de verdad decide). Importante:
+  // NO usar resolverAtributoColumna aquí — al no existir columna real que resuelva esto, su
+  // fallback por IA recibiría una descripción inventada y podría fijar para siempre (vía
+  // farmatic_field_map) una columna real pero semánticamente ajena.
+  const selCodigosDto = `NULL`;
 
   const fechaLim = new Date();
   fechaLim.setDate(fechaLim.getDate() - diasAtras);
