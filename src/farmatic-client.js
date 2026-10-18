@@ -1395,7 +1395,16 @@ async function fetchRecepcionesDescuentoReal(diasAtras = 90) {
         r.${colIdRecep}               AS id_recep,
         LTRIM(RTRIM(a.Laboratorio))   AS laboratorio,
         ${selCodigosDto}              AS codigos_dto,
-        COUNT(DISTINCT LTRIM(RTRIM(a.Laboratorio))) OVER (PARTITION BY r.${colIdRecep}) AS n_laboratorios
+        -- SQL Server no permite DISTINCT dentro de un agregado usado con OVER() (error real
+        -- "Use of DISTINCT is not allowed with the OVER clause", 19/10/2026) — subconsulta
+        -- correlacionada por id_recep en su lugar. Sin los filtros de Baja/importe/cantidad de
+        -- la consulta principal a propósito: n_laboratorios describe la FORMA real del albarán
+        -- completo (§1.2, "Lógica de compra" parte 1), no solo de las líneas que pasan el
+        -- filtro de calidad para el coste.
+        (SELECT COUNT(DISTINCT LTRIM(RTRIM(a2.Laboratorio)))
+           FROM ${nombreLineaRecep} lr2
+           INNER JOIN Articu a2 ON LTRIM(RTRIM(a2.IdArticu)) = LTRIM(RTRIM(lr2.${colCodigo}))
+          WHERE lr2.${colIdLineaRecep} = r.${colIdRecep}) AS n_laboratorios
       FROM ${nombreLineaRecep} lr
       INNER JOIN ${nombreRecep} r ON lr.${colIdLineaRecep} = r.${colIdRecep}
       INNER JOIN Articu a ON LTRIM(RTRIM(a.IdArticu)) = LTRIM(RTRIM(lr.${colCodigo}))
