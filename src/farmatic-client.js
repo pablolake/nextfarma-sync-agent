@@ -3752,6 +3752,10 @@ async function procesarListaNegraPendiente(cambios) {
     log.warn('Lista Negra omitida: configura la lista en el Asistente (paso Listas) para activar la escritura en Farmatic');
     return { procesados: 0, errores: 0, ids_procesados: [] };
   }
+  // IDs de las listas de color para sacar el CN de ellas al meterlo en lista roja
+  const listasColorIds = Object.values(COLOR_ENV)
+    .map(envKey => parseInt(process.env[envKey], 10))
+    .filter(id => id > 0);
   const p = await getPool();
   let procesados = 0, errores = 0;
   const ids_procesados = [];
@@ -3771,7 +3775,13 @@ async function procesarListaNegraPendiente(cambios) {
             INSERT INTO ItemListaArticu (XItem_IdLista, XItem_IdArticu)
             VALUES (@lista, @cn)
           `);
-        log.info(`Lista Negra: CN ${cn} añadido`);
+        // Sacar de verde/amarillo/gris/negro en el mismo ciclo, sin esperar al siguiente sync de colores
+        if (listasColorIds.length) {
+          await p.request()
+            .input('cn', sql.Int, cn)
+            .query(`DELETE FROM ItemListaArticu WHERE XItem_IdArticu = @cn AND XItem_IdLista IN (${listasColorIds.join(',')})`);
+        }
+        log.info(`Lista Negra: CN ${cn} añadido y quitado de listas de color`);
       } else {
         await p.request()
           .input('lista', sql.Int, listaNegraId)
