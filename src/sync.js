@@ -1109,6 +1109,13 @@ async function runSync(opts = {}) {
       if (aseguradaRoja?.fallos?.length) {
         warn(`No se pudo crear/renombrar la Lista Roja: ${aseguradaRoja.fallos.join('; ')}`);
       }
+      // Si no se creó ni falló, significa que LIST_NEGRA ya tenía valor — verificar que la lista existe en Farmatic
+      if (!aseguradaRoja?.omitida && !aseguradaRoja?.creadas?.length && !aseguradaRoja?.fallos?.length) {
+        const listNegra = process.env.LIST_NEGRA
+        if (!listNegra || !parseInt(listNegra, 10)) {
+          warn(`Lista Roja no configurada (LIST_NEGRA vacío o inválido: "${listNegra}") — XF ROJO no existe en Farmatic`);
+        }
+      }
     }
   } catch (e) {
     warn('Auto-creación de la Lista Roja omitida: ' + e.message);
