@@ -328,6 +328,11 @@ async function runSync(opts = {}) {
     warn('Auto-creación de listas (fase A) omitida: ' + e.message);
   }
 
+  // Colas pendientes (favoritos, lista negra, stock) ANTES de los colores — así cuando el
+  // sync de colores corra, la BD ya refleja los cambios de lista_negra del mismo ciclo:
+  // sin esto, quitar un CN de lista roja dejaba 1 ciclo de lag antes de recuperar su color.
+  await procesarColasPendientes(api, log, warn);
+
   // Listas de color de margen (VERDE/AMARILLO/GRIS, ver asignarColoresPorMU en nextfarma-api)
   // — TODOS los CN de cada GH con su propio color, no solo el favorito (02/10/2026, petición
   // explícita: "mejor no, no solo favs, todo los de ese color"; ver reconciliarCnsPorColor,
@@ -1108,8 +1113,6 @@ async function runSync(opts = {}) {
   } catch (e) {
     warn('Auto-creación de la Lista Roja omitida: ' + e.message);
   }
-
-  await procesarColasPendientes(api, log, warn);
 
   // Fase B de la auto-creación de listas (ver fase A al principio del sync): con las
   // ventas de este ciclo ya subidas, se rellenan con "más vendido" los grupos que la fase
