@@ -423,6 +423,15 @@ async function reportarListasCreadas(payload) {
   }
 }
 
+async function reportarListNegra(lista_id) {
+  try {
+    return await request('/api/sync/list-negra', { method: 'POST', body: { lista_id } });
+  } catch (err) {
+    log.warn('reportarListNegra falló:', err.message);
+    return { ok: false };
+  }
+}
+
 // Traza en vivo del paso actual del sync (ver step() en sync.js) — deliberadamente
 // fire-and-forget: si esto falla (sin red, backend caído) nunca debe frenar ni cancelar
 // el sync en sí, solo perderse la visibilidad en el panel de admin de ese paso concreto.
@@ -528,6 +537,7 @@ module.exports = {
   obtenerColoresActuales,
   obtenerColoresPublicitariosActuales,
   reportarListasCreadas,
+  reportarListNegra,
   reportarPaso,
   reportarCategoriasSinResolver,
   obtenerBandasParaGruposFarmatic,

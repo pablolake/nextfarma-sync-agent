@@ -1110,6 +1110,12 @@ async function runSync(opts = {}) {
   // esto, porque LIST_NEGRA es compartida entre Receta y Publicitarios).
   try {
     const cfgTenant = await api.obtenerConfigSync();
+    // Trigger remoto (13/11/2026): si el panel admin activó farmatic_reset_list_negra, borrar
+    // LIST_NEGRA para que asegurarListaRoja() cree "XF ROJO" aunque ya apuntara a otra lista.
+    if (cfgTenant.farmatic_reset_list_negra && process.env.LIST_NEGRA) {
+      ok(`Reset Lista Roja remoto activado — borrando LIST_NEGRA (era ${process.env.LIST_NEGRA})`);
+      delete process.env.LIST_NEGRA;
+    }
     if (cfgTenant.farmatic_write_enabled && (cfgTenant.farmatic_autocrear_listas || cfgTenant.farmatic_autocrear_listas_publicitarios)) {
       const aseguradaRoja = await farmatic.asegurarListaRoja();
       if (aseguradaRoja?.omitida) {
@@ -1118,6 +1124,10 @@ async function runSync(opts = {}) {
         listaRojaCreada = Object.fromEntries(aseguradaRoja.creadas.map(c => [c.categoria, c.lista_id]));
         await api.reportarListasCreadas({ listas: aseguradaRoja.creadas, favoritos_creados: 0 });
         ok('Lista Roja creada en Farmatic');
+        // Si fue un reset remoto, notificar al servidor para que apague el flag (one-shot).
+        if (cfgTenant.farmatic_reset_list_negra && listaRojaCreada?.rojo) {
+          await api.reportarListNegra(listaRojaCreada.rojo);
+        }
         await farmatic.fetchListasWizard()
           .then(listasActualizadas => api.enviarSchemaInfo({ listas: listasActualizadas }))
           .catch(e => warn('No se pudo actualizar la estructura tras crear la Lista Roja: ' + e.message));
