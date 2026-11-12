@@ -4252,6 +4252,135 @@ async function fetchRGPDDistribucion() {
   }
 }
 
+// ── Reconciliación de bandas de precio como GrupoGenerico en Farmatic ───────────────────────
+// Escribe una banda = un GrupoGenerico en el rango 900001+ (nunca toca el rango del Consejo).
+// IdGrupoGen = 900000 + id_subfamilia × 10 + (tramo_idx + 1).
+// Regla de seguridad en TODOS los DELETE/UPDATE: IdGrupoGen >= 900000.
+//
+// @param bandas  Array de { subfamilia_id, subfamilia_nombre, tramo_idx, cns: number[] }
+//                procedente de /api/sync/publicitarios/grupos-farmatic.
+// @param log     Logger del ciclo de sync.
+// @returns       { creados, actualizados, borrados, cnAniadidos, cnQuitados, advertencias }
+async function sincronizarGruposFarmatic(bandas, logFn, warnFn) {
+  const p = await getPool();
+  const MAX_CN_BANDA = 10;
+  const MAX_CN_SF = 30;
+
+  let creados = 0, actualizados = 0, borrados = 0, cnAniadidos = 0, cnQuitados = 0;
+  const advertencias = [];
+  const idsVigentes = [];
+
+  // Paso 1: Verificar que las tablas existan antes de tocar nada.
+  try {
+    await p.request().query(`SELECT TOP 1 IdGrupoGen FROM GrupoGenerico WHERE IdGrupoGen >= 900000`);
+    await p.request().query(`SELECT TOP 1 IdGrupoGen FROM GeneArti WHERE IdGrupoGen >= 900000`);
+  } catch (e) {
+    throw new Error(`GrupoGenerico o GeneArti no existen en esta instalación: ${e.message}`);
+  }
+
+  // Verificación de seguridad previa: contar grupos del Consejo para confirmar al final que no los tocamos.
+  const consejoPrev = await p.request()
+    .query(`SELECT COUNT(*) AS n FROM GrupoGenerico WHERE IdGrupoGen < 900000`);
+  const nConsejoAntes = consejoPrev.recordset[0].n;
+
+  for (const banda of bandas) {
+    const { subfamilia_id, subfamilia_nombre, tramo_idx, cns: cnsSrc } = banda;
+    const numBanda = tramo_idx + 1;  // 1-based según especificación §3
+    const idGrupo = 900000 + subfamilia_id * 10 + numBanda;
+
+    // Límite de seguridad §8
+    if (cnsSrc.length > MAX_CN_BANDA) {
+      advertencias.push(`Banda sf${subfamilia_id}/t${tramo_idx}: ${cnsSrc.length} CN superan el límite de ${MAX_CN_BANDA} — se toman los primeros ${MAX_CN_BANDA}`);
+    }
+    const cnsAEscribir = cnsSrc.slice(0, MAX_CN_BANDA);
+
+    const descripcion = `XF ${subfamilia_nombre || `Subfamilia ${subfamilia_id}`}`;
+    const codigoOficial = `XF${String(idGrupo).padStart(6, '0')}`;
+
+    idsVigentes.push(idGrupo);
+
+    const transaction = new sql.Transaction(p);
+    try {
+      await transaction.begin();
+      const req = () => new sql.Request(transaction);
+
+      // Paso 3: Crear o actualizar GrupoGenerico
+      const existsR = await req().input('id', sql.Int, idGrupo)
+        .query(`SELECT 1 FROM GrupoGenerico WHERE IdGrupoGen = @id`);
+      if (existsR.recordset.length) {
+        await req().input('id', sql.Int, idGrupo).input('desc', sql.VarChar(250), descripcion).input('cod', sql.Char(20), codigoOficial)
+          .query(`UPDATE GrupoGenerico SET Descripcion = @desc, CodigoOficial = @cod, IsPropio = 1 WHERE IdGrupoGen = @id AND IdGrupoGen >= 900000`);
+        actualizados++;
+      } else {
+        await req().input('id', sql.Int, idGrupo).input('desc', sql.VarChar(250), descripcion).input('cod', sql.Char(20), codigoOficial)
+          .query(`INSERT INTO GrupoGenerico (IdGrupoGen, Descripcion, Unidades, FFarmaceutica, PrecioRef, Libre, CodigoOficial, PrecioMenor, Via, NumeroPA, IsPropio)
+                  VALUES (@id, @desc, 0, -1, 0, 0, @cod, NULL, NULL, NULL, 1)`);
+        creados++;
+      }
+
+      // Tabla temporal con los CN válidos (no dados de baja en Articu)
+      await req().query(`IF OBJECT_ID('tempdb..#cnBanda') IS NOT NULL DROP TABLE #cnBanda`);
+      await req().query(`CREATE TABLE #cnBanda (IdArticu CHAR(6))`);
+      for (const cn of cnsAEscribir) {
+        const cnStr = String(cn).padStart(6, '0');
+        await req().input('cn', sql.Char(6), cnStr)
+          .query(`INSERT INTO #cnBanda (IdArticu) VALUES (@cn)`);
+      }
+
+      // Paso 4a: Insertar los CN que faltan (solo si Articu existe y Baja=0)
+      const insR = await req().input('id', sql.Int, idGrupo)
+        .query(`INSERT INTO GeneArti (IdGrupoGen, IdArticu, EFG, Libre, PrecioRef)
+                SELECT @id, c.IdArticu, 0, 0, NULL
+                FROM #cnBanda c
+                JOIN Articu a ON a.IdArticu = c.IdArticu AND a.Baja = 0
+                WHERE NOT EXISTS (SELECT 1 FROM GeneArti g WHERE g.IdGrupoGen = @id AND g.IdArticu = c.IdArticu)`);
+      cnAniadidos += insR.rowsAffected[0] ?? 0;
+
+      // CN válidos que no existen en Articu o están de baja — advertir
+      const faltanR = await req().input('id', sql.Int, idGrupo)
+        .query(`SELECT c.IdArticu FROM #cnBanda c WHERE NOT EXISTS (SELECT 1 FROM Articu a WHERE a.IdArticu = c.IdArticu AND a.Baja = 0)`);
+      for (const row of faltanR.recordset) {
+        advertencias.push(`Banda sf${subfamilia_id}/t${tramo_idx}: CN ${row.IdArticu} no existe en Articu o está de baja — no incluido`);
+      }
+
+      // Paso 4b: Borrar los CN que sobran
+      const delCnR = await req().input('id', sql.Int, idGrupo)
+        .query(`DELETE g FROM GeneArti g WHERE g.IdGrupoGen = @id AND g.IdGrupoGen >= 900000
+                AND NOT EXISTS (SELECT 1 FROM #cnBanda c WHERE c.IdArticu = g.IdArticu)`);
+      cnQuitados += delCnR.rowsAffected[0] ?? 0;
+
+      await req().query(`DROP TABLE #cnBanda`);
+      await transaction.commit();
+    } catch (e) {
+      try { await transaction.rollback(); } catch {}
+      warnFn?.(`Banda sf${subfamilia_id}/t${tramo_idx} (id ${idGrupo}) falló: ${e.message}`);
+    }
+  }
+
+  // Paso 5: Borrar grupos nuestros que ya no corresponden a ninguna banda vigente
+  if (idsVigentes.length) {
+    const p2 = await getPool();
+    const idsList = idsVigentes.join(',');
+    const delGaR = await p2.request()
+      .query(`DELETE g FROM GeneArti g WHERE g.IdGrupoGen >= 900000 AND g.IdGrupoGen NOT IN (${idsList})`);
+    const delGgR = await p2.request()
+      .query(`DELETE FROM GrupoGenerico WHERE IdGrupoGen >= 900000 AND IsPropio = 1 AND IdGrupoGen NOT IN (${idsList})`);
+    borrados += delGgR.rowsAffected[0] ?? 0;
+    if (delGaR.rowsAffected[0] > 0 || delGgR.rowsAffected[0] > 0) {
+      logFn?.(`Grupos Farmatic: eliminados ${delGgR.rowsAffected[0]} grupos obsoletos (${delGaR.rowsAffected[0]} CN asociados)`);
+    }
+  }
+
+  // Paso 7: Verificación — confirmar que no tocamos el Consejo
+  const consejoPost = await p.request()
+    .query(`SELECT COUNT(*) AS n FROM GrupoGenerico WHERE IdGrupoGen < 900000`);
+  if (consejoPost.recordset[0].n !== nConsejoAntes) {
+    throw new Error(`SEGURIDAD: el número de grupos del Consejo cambió durante la reconciliación (${nConsejoAntes} → ${consejoPost.recordset[0].n}) — revisar`);
+  }
+
+  return { creados, actualizados, borrados, cnAniadidos, cnQuitados, advertencias };
+}
+
 module.exports = {
   getPool,
   closePool,
@@ -4308,6 +4437,7 @@ module.exports = {
   fetchRGPDCount,
   fetchRGPDDistribucion,
   runDiagnostic,
+  sincronizarGruposFarmatic,
   IVA_MEDICAMENTOS,
   RE,
   PVL_FACTOR,

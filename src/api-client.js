@@ -404,6 +404,16 @@ async function obtenerColoresPublicitariosActuales() {
   }
 }
 
+async function obtenerBandasParaGruposFarmatic() {
+  try {
+    const r = await request('/api/sync/publicitarios/grupos-farmatic');
+    return r.bandas || [];
+  } catch (err) {
+    log.warn('obtenerBandasParaGruposFarmatic falló:', err.message);
+    return [];
+  }
+}
+
 async function reportarListasCreadas(payload) {
   try {
     return await request('/api/sync/listas-creadas', { method: 'POST', body: payload });
@@ -520,6 +530,7 @@ module.exports = {
   reportarListasCreadas,
   reportarPaso,
   reportarCategoriasSinResolver,
+  obtenerBandasParaGruposFarmatic,
   sugerirListas,
   obtenerMapeoEsquema,
   reportarMapeoResuelto,

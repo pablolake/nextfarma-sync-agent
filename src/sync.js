@@ -413,6 +413,27 @@ async function runSync(opts = {}) {
   } catch (e) {
     warn('Auto-creación de listas de Publicitarios omitida: ' + e.message);
   }
+  // Grupos Genéricos de Publicitarios en Farmatic (12/11/2026) — escribe una banda de precio
+  // como GrupoGenerico en el rango 900001+ para que la pantalla de alternativas del POS muestre
+  // los productos comparables por precio con su verde entre ellos. Idempotente, una vez al día
+  // (reconciliación completa y segura: nunca toca IdGrupoGen < 900000).
+  try {
+    const cfgTenant2 = await api.obtenerConfigSync();
+    if (cfgTenant2.farmatic_write_enabled && cfgTenant2.farmatic_autocrear_listas_publicitarios) {
+      const bandas = await api.obtenerBandasParaGruposFarmatic();
+      if (bandas.length) {
+        const resGrupos = await farmatic.sincronizarGruposFarmatic(bandas, ok, warn);
+        const { creados, actualizados, borrados, cnAniadidos, cnQuitados, advertencias } = resGrupos;
+        if (creados || actualizados || borrados || cnAniadidos || cnQuitados) {
+          ok(`Grupos Farmatic Publicitarios: ${creados} creados, ${actualizados} actualizados, ${borrados} borrados, ${cnAniadidos} CN añadidos, ${cnQuitados} CN quitados`);
+        }
+        for (const adv of advertencias || []) warn(adv);
+      }
+    }
+  } catch (e) {
+    warn('Sincronización de grupos de Publicitarios en Farmatic omitida: ' + e.message);
+  }
+
   // Homologación de nombres (31/08/2026) — candado PROPIO (farmatic_homologar_nombres_listas),
   // acción explícita por farmacia, nunca automática: renombra "NextFarma - X" → "NF - X" en
   // instalaciones que ya venían usando el auto-creador desde antes del acortado de prefijos
