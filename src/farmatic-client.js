@@ -4264,18 +4264,17 @@ async function fetchRGPDDistribucion() {
 async function sincronizarGruposFarmatic(bandas, logFn, warnFn) {
   const p = await getPool();
   const MAX_CN_BANDA = 10;
-  const MAX_CN_SF = 30;
 
   let creados = 0, actualizados = 0, borrados = 0, cnAniadidos = 0, cnQuitados = 0;
   const advertencias = [];
   const idsVigentes = [];
 
-  // Paso 1: Verificar que las tablas existan antes de tocar nada.
+  // Paso 1: Verificar que las tablas existan y tengan las columnas requeridas.
   try {
-    await p.request().query(`SELECT TOP 1 IdGrupoGen FROM GrupoGenerico WHERE IdGrupoGen >= 900000`);
-    await p.request().query(`SELECT TOP 1 IdGrupoGen FROM GeneArti WHERE IdGrupoGen >= 900000`);
+    await p.request().query(`SELECT TOP 1 IdGrupoGen, IsPropio FROM GrupoGenerico WHERE IdGrupoGen >= 900000`);
+    await p.request().query(`SELECT TOP 1 IdGrupoGen, IdArticu FROM GeneArti WHERE IdGrupoGen >= 900000`);
   } catch (e) {
-    throw new Error(`GrupoGenerico o GeneArti no existen en esta instalación: ${e.message}`);
+    throw new Error(`GrupoGenerico/GeneArti no existen o les falta la columna IsPropio — versión de Farmatic incompatible: ${e.message}`);
   }
 
   // Verificación de seguridad previa: contar grupos del Consejo para confirmar al final que no los tocamos.
@@ -4294,7 +4293,10 @@ async function sincronizarGruposFarmatic(bandas, logFn, warnFn) {
     }
     const cnsAEscribir = cnsSrc.slice(0, MAX_CN_BANDA);
 
-    const descripcion = `XF ${subfamilia_nombre || `Subfamilia ${subfamilia_id}`}`;
+    // Si la banda tiene tramo_idx > 0 incluimos el número de tramo en la descripción
+    // para que el farmacéutico distinga los tramos de precio dentro de la misma subfamilia.
+    const sfNombre = subfamilia_nombre || `Subfamilia ${subfamilia_id}`;
+    const descripcion = tramo_idx === 0 ? `XF ${sfNombre}` : `XF ${sfNombre} (tramo ${numBanda})`;
     const codigoOficial = `XF${String(idGrupo).padStart(6, '0')}`;
 
     idsVigentes.push(idGrupo);
