@@ -1531,6 +1531,21 @@ async function sincronizarListasLigero() {
     }
   } catch (e) { log.warn('Sincronización de colores en ciclo ligero omitida:', e.message) }
 
+  // Limpieza one-shot: si farmatic_autocrear_listas_publicitarios se desactivó después de haber
+  // escrito CN de Publicitarios en XF VERDE/AMARILLO/GRIS, este flag arranca una pasada que los
+  // saca de TODAS las listas de color (color=null → remove path en reconciliarCnsPorColor).
+  if (cfg.farmatic_limpiar_colores_pub) {
+    try {
+      const cnsPub = await api.obtenerCnsLimpiarPublicitarios()
+      if (cnsPub.length) {
+        await farmatic.reconciliarCnsPorColor(cnsPub, 'LimpiezaPublicitarios')
+        log.info(`Colores de Publicitarios limpiados de listas Farmatic: ${cnsPub.length} CN procesados`)
+      }
+      await api.reportarLimpiezaColoresPubDone()
+      _hashColoresLigero = null // fuerza re-sync de colores en el siguiente ciclo
+    } catch (e) { log.warn('Limpieza de colores de Publicitarios omitida:', e.message) }
+  }
+
   // Renombrado y borrado de listas legadas: operaciones baratas (un SELECT y, como mucho, un
   // puñado de UPDATE/DELETE), idempotentes y con el mismo candado por farmacia que en el ciclo
   // completo — pero cosméticas, así que van después de los colores, no antes.

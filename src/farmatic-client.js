@@ -4420,6 +4420,7 @@ module.exports = {
   resolverAtributoTabla,
   reconciliarFavoritosCategoria,
   reconciliarFavoritosColor,
+  reconciliarCnsPorColor,
   completarFavoritosConMasVendido,
   reconciliarColoresPublicitarios,
   asegurarColoresDeListas,

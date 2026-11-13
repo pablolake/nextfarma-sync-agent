@@ -404,6 +404,24 @@ async function obtenerColoresPublicitariosActuales() {
   }
 }
 
+async function obtenerCnsLimpiarPublicitarios() {
+  try {
+    const r = await request('/api/sync/publicitarios/cns-limpiar');
+    return r.cns || [];
+  } catch (err) {
+    log.warn('obtenerCnsLimpiarPublicitarios falló:', err.message);
+    return [];
+  }
+}
+
+async function reportarLimpiezaColoresPubDone() {
+  try {
+    return await request('/api/sync/publicitarios/limpiar-colores-done', { method: 'POST', body: {} });
+  } catch (err) {
+    log.warn('reportarLimpiezaColoresPubDone falló:', err.message);
+  }
+}
+
 async function obtenerBandasParaGruposFarmatic() {
   try {
     const r = await request('/api/sync/publicitarios/grupos-farmatic');
@@ -536,6 +554,8 @@ module.exports = {
   obtenerCategoriasActuales,
   obtenerColoresActuales,
   obtenerColoresPublicitariosActuales,
+  obtenerCnsLimpiarPublicitarios,
+  reportarLimpiezaColoresPubDone,
   reportarListasCreadas,
   reportarListNegra,
   reportarPaso,
