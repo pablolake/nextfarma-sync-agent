@@ -449,7 +449,9 @@ async function fetchProductos() {
       selProveedor = piezas.length > 1 ? `COALESCE(${piezas.join(', ')})` : piezas[0];
     }
   }
-  const selLaboratorioNombre = `COALESCE(NULLIF(${selLabor}, ''), NULLIF(${selProveedor}, '')) AS laboratorio_nombre,`;
+  const labExpr  = selLabor    === 'NULL' ? 'CAST(NULL AS VARCHAR(200))' : `NULLIF(${selLabor}, '')`;
+  const provExpr = selProveedor === 'NULL' ? 'CAST(NULL AS VARCHAR(200))' : `NULLIF(${selProveedor}, '')`;
+  const selLaboratorioNombre = `COALESCE(${labExpr}, ${provExpr}) AS laboratorio_nombre,`;
 
   // Próxima caducidad por CN — investigado 29/08/2026 (análisis de competencia, ver
   // documento de Intelia): Articu no sirve para esto, un producto puede tener varios lotes
