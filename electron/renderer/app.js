@@ -15,8 +15,6 @@ const wz = {
   opcRGPD: 31,
   rgpdCargado: false,   // evita recargar/repreguntar a Farmatic cada vez que se reabre el paso
   scUmbral: 2500, scCN: 5, scKT: 10,
-  lists: [],            // all lists from Farmatic
-  listStar: null, listInc: null, listMrotA: null, listMrotB: null, listResto: null, listPar: null, listConsolidado: null, listNegra: null,
 };
 
 /* ── Init ───────────────────────────────────────────────────────────── */
@@ -489,9 +487,8 @@ async function wizardNext(step) {
   if (step > wz.step) {
     if (wz.step === 0) wizardCollectVendors();
     if (wz.step === 1) wizardCollectLabs();
-    if (wz.step === 2) wizardCollectLists();
-    if (wz.step === 3) wizardCollectRGPD();
-    // paso 4 (verificación) no requiere recoger datos
+    if (wz.step === 2) wizardCollectRGPD();
+    // paso 3 (verificación) no requiere recoger datos
   }
 
   // Activar nueva página y actualizar barra de progreso
@@ -511,9 +508,8 @@ async function wizardNext(step) {
   // Cargar datos al llegar al paso correspondiente
   if (step === 0 && wz.vendors.length === 0) await wizardLoadVendors();
   if (step === 1 && wz.labs.length === 0)    await wizardLoadLabs();
-  if (step === 2 && wz.lists.length === 0)   await wizardLoadLists();
-  if (step === 3 && !wz.rgpdCargado)         await wizardLoadRGPD();
-  if (step === 5) renderWizardSummary();
+  if (step === 2 && !wz.rgpdCargado)         await wizardLoadRGPD();
+  if (step === 4) renderWizardSummary();
 }
 
 // Lanza los 4 diagnósticos del paso 5 de una sola vez
@@ -840,7 +836,6 @@ async function wizardVerifyRGPD() {
 function renderWizardSummary() {
   wizardCollectVendors();
   wizardCollectLabs();
-  wizardCollectLists();
   wizardCollectRGPD();
 
   const excl = wz.vendors
@@ -855,19 +850,6 @@ function renderWizardSummary() {
     wz.labSecundarios ? `Secundarios: ${wz.labSecundarios}` : null,
   ].filter(Boolean);
 
-  const listMap = {
-    'INCENTIVADOS STAR': wz.listStar,
-    'INCENTIVADOS':      wz.listInc,
-    'MÁX. ROT. A':       wz.listMrotA,
-    'MÁX. ROT. B':       wz.listMrotB,
-    'RESTO':             wz.listResto,
-    'PARADOS':           wz.listPar,
-    'CONSOLIDADO':       wz.listConsolidado,
-  };
-  const listLines = Object.entries(listMap)
-    .filter(([, v]) => v)
-    .map(([k, v]) => `${k} → Lista ${v}`);
-
   const container = document.getElementById('wizard-summary');
   container.innerHTML = [
     item('', 'Vendedores excluidos',
@@ -876,8 +858,6 @@ function renderWizardSummary() {
       labLines.length ? labLines.join(' · ') : 'Sin configurar (SC no se calculará)'),
     item('', 'Umbrales SC',
       `Umbral ${wz.scUmbral}€/mes · CINFA/NORMON ${wz.scCN}% · KERN/TEVA ${wz.scKT}%`),
-    item('', 'Listas de favoritos',
-      listLines.length ? listLines.join(' · ') : 'Sin asignar (favoritos omitidos)'),
     item('', 'RGPD — Código consentimiento', `OpcRGPD = ${wz.opcRGPD}`),
   ].join('');
 
@@ -895,7 +875,6 @@ function renderWizardSummary() {
 async function wizardFinish() {
   wizardCollectVendors();
   wizardCollectLabs();
-  wizardCollectLists();
   wizardCollectRGPD();
 
   const wizardCfg = {
@@ -909,14 +888,6 @@ async function wizardFinish() {
     scUmbral:           wz.scUmbral,
     scCinfaNormon:      wz.scCN / 100,
     scKernTeva:         wz.scKT / 100,
-    listIncentivadosStar: wz.listStar,
-    listIncentivados:     wz.listInc,
-    listMaxRotA:          wz.listMrotA,
-    listMaxRotB:          wz.listMrotB,
-    listResto:            wz.listResto,
-    listParados:          wz.listPar,
-    listConsolidado:      wz.listConsolidado,
-    listNegra:            wz.listNegra,
   };
 
   await window.sync.wizardSave(wizardCfg);

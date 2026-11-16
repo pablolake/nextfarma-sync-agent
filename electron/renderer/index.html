@@ -334,28 +334,23 @@ ORDER  BY name</pre>
         <div class="wstep-line"></div>
         <div class="wstep" id="ws-2">
           <span class="wstep-num">3</span>
-          <span class="wstep-lbl">Listas</span>
+          <span class="wstep-lbl">RGPD</span>
         </div>
         <div class="wstep-line"></div>
         <div class="wstep" id="ws-3">
           <span class="wstep-num">4</span>
-          <span class="wstep-lbl">RGPD</span>
+          <span class="wstep-lbl">Tablas</span>
         </div>
         <div class="wstep-line"></div>
         <div class="wstep" id="ws-4">
           <span class="wstep-num">5</span>
-          <span class="wstep-lbl">Tablas</span>
-        </div>
-        <div class="wstep-line"></div>
-        <div class="wstep" id="ws-5">
-          <span class="wstep-num">6</span>
           <span class="wstep-lbl">Resumen</span>
         </div>
       </div>
 
       <!-- Step 0: Vendedores -->
       <div class="wpage active" id="wp-0">
-        <div class="wpage-title">Paso 1 de 6 — Vendedores a excluir</div>
+        <div class="wpage-title">Paso 1 de 5 — Vendedores a excluir</div>
         <p class="wpage-desc">
           Farmatic tiene un <strong>vendedor de sistema</strong> que registra ventas internas
           (bajas de stock, autoconsumo…). Marca los que deben <em>excluirse</em> del análisis
@@ -378,7 +373,7 @@ ORDER  BY name</pre>
 
       <!-- Step 1: Labs SC -->
       <div class="wpage" id="wp-1">
-        <div class="wpage-title">Paso 2 de 6 — Laboratorios de Selección de Genéricos</div>
+        <div class="wpage-title">Paso 2 de 5 — Laboratorios de Selección de Genéricos</div>
         <p class="wpage-desc">
           Para calcular los rappels de SC necesitamos saber qué código de proveedor usa
           tu Farmatic para CINFA, NORMON, KERN y TEVA. Selecciona el código de cada uno.
@@ -431,67 +426,9 @@ ORDER  BY name</pre>
         </div>
       </div>
 
-      <!-- Step 2: Listas -->
+      <!-- Step 2: RGPD -->
       <div class="wpage" id="wp-2">
-        <div class="wpage-title">Paso 3 de 6 — Listas de favoritos</div>
-        <p class="wpage-desc">
-          XestFarma organiza los genéricos en categorías. Asigna cada categoría a la
-          lista de Farmatic correspondiente (crea las listas en <strong>Utilidades → Listas de artículos</strong> si no existen).
-          Si no usas esta funcionalidad deja "— Sin asignar —". CONSOLIDADO es opcional: si tu
-          Farmatic no la distingue, déjala sin asignar y el resto seguirá funcionando igual.
-        </p>
-        <div class="wizard-loading" id="w2-loading">Cargando listas desde Farmatic…</div>
-        <div id="w2-error" class="wpage-error" style="display:none"></div>
-        <div id="w2-form" style="display:none">
-          <div class="wlist-grid">
-            <div class="wlist-row"><span class="wlist-cat">INCENTIVADOS STAR</span>
-              <select id="wz-list-star" class="input wlist-sel"></select>
-              <span class="wlist-badge" id="wz-list-star-badge" style="display:none"></span>
-            </div>
-            <div class="wlist-row"><span class="wlist-cat">INCENTIVADOS</span>
-              <select id="wz-list-inc" class="input wlist-sel"></select>
-              <span class="wlist-badge" id="wz-list-inc-badge" style="display:none"></span>
-            </div>
-            <div class="wlist-row"><span class="wlist-cat">MÁX. ROTACIÓN A</span>
-              <select id="wz-list-mrota" class="input wlist-sel"></select>
-              <span class="wlist-badge" id="wz-list-mrota-badge" style="display:none"></span>
-            </div>
-            <div class="wlist-row"><span class="wlist-cat">MÁX. ROTACIÓN B</span>
-              <select id="wz-list-mrotb" class="input wlist-sel"></select>
-              <span class="wlist-badge" id="wz-list-mrotb-badge" style="display:none"></span>
-            </div>
-            <div class="wlist-row"><span class="wlist-cat">RESTO</span>
-              <select id="wz-list-resto" class="input wlist-sel"></select>
-              <span class="wlist-badge" id="wz-list-resto-badge" style="display:none"></span>
-            </div>
-            <div class="wlist-row"><span class="wlist-cat">PARADOS</span>
-              <select id="wz-list-par" class="input wlist-sel"></select>
-              <span class="wlist-badge" id="wz-list-par-badge" style="display:none"></span>
-            </div>
-            <div class="wlist-row"><span class="wlist-cat">CONSOLIDADO</span>
-              <select id="wz-list-consolidado" class="input wlist-sel"></select>
-              <span class="wlist-badge" id="wz-list-consolidado-badge" style="display:none"></span>
-            </div>
-            <div class="wlist-row"><span class="wlist-cat">LISTA NEGRA</span>
-              <select id="wz-list-negra" class="input wlist-sel"></select>
-            </div>
-          </div>
-        </div>
-        <div class="wdiag-panel" id="wdiag-2">
-          <button class="wdiag-toggle" onclick="wizardDiag(2,'listas','¿No aparecen las listas correctas?')">
-            ¿No aparecen las listas esperadas? — Consultar Farmatic
-          </button>
-          <div class="wdiag-body" id="wdiag-body-2" style="display:none"></div>
-        </div>
-        <div class="wizard-nav">
-          <button class="btn btn-secondary" onclick="wizardNext(1)">← Anterior</button>
-          <button class="btn btn-primary" onclick="wizardNext(3)">Siguiente →</button>
-        </div>
-      </div>
-
-      <!-- Step 3: RGPD -->
-      <div class="wpage" id="wp-3">
-        <div class="wpage-title">Paso 4 de 6 — Consentimiento RGPD (Crónicos)</div>
+        <div class="wpage-title">Paso 3 de 5 — Consentimiento RGPD (Crónicos)</div>
         <p class="wpage-desc">
           El módulo de crónicos lee los pacientes con consentimiento RGPD activo.
           Cada Farmatic puede usar un código distinto — abajo tienes todos los códigos
@@ -516,14 +453,14 @@ ORDER  BY name</pre>
           </div>
         </div>
         <div class="wizard-nav">
-          <button class="btn btn-secondary" onclick="wizardNext(2)">← Anterior</button>
-          <button class="btn btn-primary" onclick="wizardNext(4)">Siguiente →</button>
+          <button class="btn btn-secondary" onclick="wizardNext(1)">← Anterior</button>
+          <button class="btn btn-primary" onclick="wizardNext(3)">Siguiente →</button>
         </div>
       </div>
 
-      <!-- Step 4: Verificación de tablas -->
-      <div class="wpage" id="wp-4">
-        <div class="wpage-title">Paso 5 de 6 — Verificación de tablas</div>
+      <!-- Step 3: Verificación de tablas -->
+      <div class="wpage" id="wp-3">
+        <div class="wpage-title">Paso 4 de 5 — Verificación de tablas</div>
         <p class="wpage-desc">
           Comprueba que las tablas principales de Farmatic son accesibles y tienen datos.
           Usa los botones para consultar cada área directamente contra tu base de datos.
@@ -566,17 +503,17 @@ ORDER  BY name</pre>
         </div>
 
         <div class="wizard-nav">
-          <button class="btn btn-secondary" onclick="wizardNext(3)">← Anterior</button>
-          <button class="btn btn-primary" onclick="wizardNext(5)">Siguiente →</button>
+          <button class="btn btn-secondary" onclick="wizardNext(2)">← Anterior</button>
+          <button class="btn btn-primary" onclick="wizardNext(4)">Siguiente →</button>
         </div>
       </div>
 
-      <!-- Step 5: Summary -->
-      <div class="wpage" id="wp-5">
-        <div class="wpage-title">Paso 6 de 6 — Resumen</div>
+      <!-- Step 4: Summary -->
+      <div class="wpage" id="wp-4">
+        <div class="wpage-title">Paso 5 de 5 — Resumen</div>
         <div id="wizard-summary" class="wizard-summary"></div>
         <div class="wizard-nav">
-          <button class="btn btn-secondary" onclick="wizardNext(3)">← Modificar</button>
+          <button class="btn btn-secondary" onclick="wizardNext(2)">← Modificar</button>
           <button class="btn btn-primary btn-lg" onclick="wizardFinish()">Guardar configuración</button>
         </div>
       </div>
